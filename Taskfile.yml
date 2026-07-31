@@ -1,0 +1,52 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  fmt:
+    desc: Format Go code (gofmt + goimports)
+    cmds:
+      - go tool golangci-lint fmt
+
+  lint:
+    desc: Lint Go code (includes go vet via golangci-lint)
+    cmds:
+      - go tool golangci-lint run ./...
+
+  test:
+    desc: Run unit and acceptance tests (hermetic, no network)
+    cmds:
+      - go tool gotestsum -- ./...
+
+  tidy:
+    desc: Tidy go.mod / go.sum
+    cmds:
+      - go mod tidy
+
+  lint-mod:
+    desc: Check go.mod / go.sum are tidy
+    deps: [tidy]
+    cmds:
+      - git diff --exit-code -- go.mod go.sum
+
+  dry-run:
+    desc: Cross-compile setup-go locally, without uploading
+    cmds:
+      - go tool release --name setup-go --version 0.0.0-dryrun --dry-run
+
+  ci:
+    desc: Run everything CI runs (lint + test + dry-run)
+    cmds:
+      - task: lint
+      - task: test
+      - task: dry-run
+
+  publish:
+    desc: Build and publish setup-go to S3 (VERSION required)
+    requires:
+      vars: [VERSION]
+    cmds:
+      - go tool release --name setup-go --version "{{.VERSION}}"

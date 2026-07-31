@@ -1,0 +1,161 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@5.4.2
+
+parameters:
+  go-version:
+    type: string
+    default: "1.26.4"
+    description: >-
+      Go version for the smoke test to install.
+
+executors:
+  go:
+    docker:
+      - image: cimg/go:1.26
+  # The smoke test execs the binary `build` just cross-compiled, so it runs
+  # on a bare base image rather than a language-preinstalled one.
+  base:
+    docker:
+      - image: cimg/base:stable
+
+jobs:
+  test:
+    executor: go
+    steps:
+      - checkout
+      - run:
+          name: Allow private module access
+          command: |
+            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - run: task lint
+      - run: task test
+      - save_cache:
+          key: setup-go-go-{{ checksum "go.sum" }}-{{ epoch }}
+          paths:
+            - ~/.cache/go-build
+            - ~/go/pkg/mod
+
+  # Cross-compiles setup-go into ./dist and persists it to the workspace, so
+  # smoke-test exercises exactly what `publish` is about to ship.
+  build:
+    executor: go
+    steps:
+      - checkout
+      - run:
+          name: Allow private module access
+          command: |
+            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - run: task dry-run
+      - persist_to_workspace:
+          root: .
+          paths:
+            - dist
+
+  smoke-test:
+    executor: base
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Go
+          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}'
+      - run: go version
+      - run:
+          name: Remove install
+          command: rm -rf ~/.cache/setup-go
+      - run:
+          name: Install Go (expect cache hit)
+          command: |
+            ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}' 2>&1 | tee /tmp/setup-go-second-run.log
+            grep -q "restored from cache" /tmp/setup-go-second-run.log
+      - run:
+          name: Test command
+          command: ./dist/setup-go/linux/amd64/setup-go test --project-path ./acceptance/test-project/
+      - run:
+          name: Allow private module access
+          command: |
+            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - run:
+          name: Load lint cache
+          command: ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
+      - run:
+          name: Run golangci-lint
+          command: go tool golangci-lint run ./...
+      - run:
+          name: Save lint cache
+          command: ./dist/setup-go/linux/amd64/setup-go cache save --golangci-lint --checksum '{{ checksum "go.sum" }}'
+      - run:
+          name: Remove lint cache
+          command: rm -rf ~/.cache/golangci-lint
+      - run:
+          name: Load lint cache (expect hit)
+          command: |
+            ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
+            test -n "$(ls -A ~/.cache/golangci-lint)"
+
+  publish:
+    executor: go
+    steps:
+      - checkout
+      - run:
+          name: Allow private module access
+          command: |
+            git config --global url."https://$GITHUB_USER:$GITHUB_TOKEN@github.com/circleci-functions/".insteadOf "https://github.com/circleci-functions/"
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - aws-cli/setup:
+          role_arn: $FUNCTIONS_PUBLISHER_ROLE_ARN
+          region: us-east-1
+      - run:
+          name: Extract version from tag
+          command: |
+            VERSION="${CIRCLE_TAG#v}-$(git rev-parse --short HEAD)"
+            echo "export VERSION=$VERSION" >> "$BASH_ENV"
+      - run:
+          name: Build and publish
+          command: task publish VERSION="$VERSION"
+
+workflows:
+  test-publish:
+    jobs:
+      - test:
+          context: [github-readonly]
+          filters:
+            tags:
+              only: /.*/
+      - build:
+          context: [github-readonly]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-test:
+          requires: [build]
+          context: [github-readonly]
+          filters:
+            tags:
+              only: /.*/
+      - publish:
+          requires: [test, smoke-test]
+          context: [functions-publisher, github-readonly]
+          filters:
+            tags:
+              only: /^v\d+\.\d+\.\d+$/
+            branches:
+              ignore: /.*/
