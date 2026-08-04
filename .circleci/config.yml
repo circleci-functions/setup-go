@@ -115,7 +115,7 @@ jobs:
       - run:
           name: Extract version from tag
           command: |
-            VERSION="${CIRCLE_TAG#v}-$(git rev-parse --short HEAD)"
+            VERSION="${CIRCLE_TAG}-$(git rev-parse --short HEAD)"
             echo "export VERSION=$VERSION" >> "$BASH_ENV"
       - run:
           name: Build and publish
