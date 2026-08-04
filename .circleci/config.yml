@@ -1,7 +1,6 @@
 version: 2.1
 
 orbs:
-  aws-cli: circleci/aws-cli@5.4.2
   toolkit: https://raw.githubusercontent.com/circleci-functions/toolkit/refs/heads/main/orbs/toolkit.yml
 
 parameters:
@@ -109,9 +108,8 @@ jobs:
           keys:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
-      - aws-cli/setup:
+      - toolkit/setup-aws-oidc:
           role_arn: $FUNCTIONS_PUBLISHER_ROLE_ARN
-          region: us-east-1
       - run:
           name: Extract version from tag
           command: |
