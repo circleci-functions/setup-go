@@ -3,7 +3,9 @@ package cache_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -129,6 +131,41 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildCacheDir checks BuildCacheDir against the real `go env GOCACHE`,
+// so wiring it to the wrong GoEnv field (e.g. GOMODCACHE) fails a test.
+func TestBuildCacheDir(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOCACHE").Output()
+	assert.NilError(t, err)
+
+	dir, err := cache.BuildCacheDir()
+	assert.NilError(t, err)
+	assert.Equal(t, dir, strings.TrimSpace(string(out)))
+}
+
+// TestBuildCache_KeyIsDistinctFromLintCache verifies the build and lint caches
+// don't collide: both keys are built by the same shared helper and differ only
+// in their tool component, so a restore of one must not pick up the other's
+// entry saved under the same key/checksum.
+func TestBuildCache_KeyIsDistinctFromLintCache(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	client := srv.Client()
+	ctx := context.Background()
+
+	t.Setenv("HOME", t.TempDir())
+	lintDir, err := cache.LintCacheDir()
+	assert.NilError(t, err)
+	assert.NilError(t, os.MkdirAll(lintDir, 0750))
+	assert.NilError(t, os.WriteFile(filepath.Join(lintDir, "marker"), []byte("hit"), 0600))
+
+	cache.SaveLintCache(ctx, client, "", "checksum-a")
+	assert.NilError(t, os.RemoveAll(lintDir))
+
+	cache.RestoreBuildCache(ctx, client, "", "checksum-a")
+
+	_, err = os.Stat(filepath.Join(lintDir, "marker"))
+	assert.Assert(t, os.IsNotExist(err), "expected the build cache restore to miss the lint cache entry")
 }
 
 // TestGoModCache_CacheErrorIsNonFatal verifies that a client which can't

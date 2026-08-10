@@ -8,12 +8,14 @@ import (
 	"time"
 
 	"github.com/circleci-functions/toolkit/sdk"
+
+	"github.com/circleci-functions/setup-go/goenv"
 )
 
-// lintCacheRotation is how often the lint cache key rotates, forcing a fresh
-// cache even with no other change. Matches the circleci/go orb's
+// cacheRotation is how often the lint and build cache keys rotate, forcing a
+// fresh cache even with no other change. Matches the circleci/go orb's
 // {{ epoch | round "72h" }} cache key component.
-const lintCacheRotation = 72 * time.Hour
+const cacheRotation = 72 * time.Hour
 
 // LintCacheDir returns golangci-lint's cache directory. It currently always
 // returns the tool's own default, ~/.cache/golangci-lint.
@@ -51,8 +53,16 @@ func SaveLintCache(ctx context.Context, client *sdk.Client, key, checksum string
 //
 //	v1-<< parameters.key >>-golangci-lint-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
 func lintCacheKey(key, checksum string) string {
-	rotation := time.Now().Unix() / int64(lintCacheRotation.Seconds()) * int64(lintCacheRotation.Seconds())
-	return fmt.Sprintf("v1-%s-golangci-lint-%s-%s-%s-%d", key, os.Getenv("CIRCLE_JOB"), sdk.OSArch(), checksum, rotation)
+	return rotatingCacheKey("golangci-lint", key, checksum)
+}
+
+// rotatingCacheKey builds a job- and arch-scoped cache key that rotates every
+// cacheRotation, mirroring the circleci/go orb's key layout:
+//
+//	v1-<key>-<tool>-<CIRCLE_JOB>-<arch>-<checksum>-<rotating epoch>
+func rotatingCacheKey(tool, key, checksum string) string {
+	rotation := time.Now().Unix() / int64(cacheRotation.Seconds()) * int64(cacheRotation.Seconds())
+	return fmt.Sprintf("v1-%s-%s-%s-%s-%s-%d", key, tool, os.Getenv("CIRCLE_JOB"), sdk.OSArch(), checksum, rotation)
 }
 
 func RestoreGoModCache(ctx context.Context, client *sdk.Client, key, checksum string) {
@@ -70,4 +80,35 @@ func SaveGoModCache(ctx context.Context, client *sdk.Client, key, checksum, dir 
 // v1-<< parameters.key >>-go-mod-{{ arch }}-<< parameters.checksum >>
 func goModCacheKey(key, checksum string) string {
 	return fmt.Sprintf("v1-%s-go-mod-%s-%s", key, sdk.OSArch(), checksum)
+}
+
+// BuildCacheDir returns the go build cache directory as reported by
+// `go env GOCACHE`, rather than assuming ~/.cache/go-build (which is wrong on
+// darwin).
+func BuildCacheDir() (string, error) {
+	e, err := goenv.Load()
+	if err != nil {
+		return "", err
+	}
+	if e.GOCACHE == "" {
+		return "", fmt.Errorf("go env reported an empty GOCACHE")
+	}
+	return e.GOCACHE, nil
+}
+
+func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
+	_, err := client.RestoreCache(ctx, []string{buildCacheKey(key, checksum)})
+	sdk.LogCacheErr("restore go build", err)
+}
+
+func SaveBuildCache(ctx context.Context, client *sdk.Client, key, checksum, dir string) {
+	err := client.SaveCache(ctx, buildCacheKey(key, checksum), []string{dir})
+	sdk.LogCacheErr("save go build", err)
+}
+
+// buildCacheKey mirrors the circleci/go orb's cache key:
+//
+//	v1-<< parameters.key >>-go-build-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+func buildCacheKey(key, checksum string) string {
+	return rotatingCacheKey("go-build", key, checksum)
 }

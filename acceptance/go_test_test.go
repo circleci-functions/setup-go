@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
 // fixtureDir resolves acceptance/test-project to an absolute path. The
@@ -89,11 +91,7 @@ func TestCLI_Test(t *testing.T) {
 			// non-zero exit.
 			name: "FailingTests_ReturnsError",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				dir := t.TempDir()
-				assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module failtest\n\ngo 1.21\n"), 0600))
-				assert.NilError(t, os.WriteFile(filepath.Join(dir, "fail_test.go"), []byte(
-					"package failtest\n\nimport \"testing\"\n\nfunc TestAlwaysFails(t *testing.T) {\n\tt.Fatal(\"boom\")\n}\n"), 0600))
-				return nil, []string{"test", "--project-path", dir}
+				return nil, []string{"test", "--project-path", failingProjectDir(t)}
 			},
 			wantErr:  true,
 			contains: []string{"FAIL"},
@@ -157,6 +155,59 @@ func TestCLI_Test(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCLI_Test_BuildCacheRoundTrip verifies that `test` restores the go build
+// cache before running and saves it afterwards — including when the tests
+// fail, since a failed run still compiled packages a re-run can reuse.
+// --cache-path points the save at a temp dir so the test never touches the
+// executor's real GOCACHE.
+func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
+	tests := []struct {
+		name        string
+		projectPath func(t *testing.T) string
+		wantErr     bool
+	}{
+		{name: "PassingSuite", projectPath: fixtureDir},
+		{name: "FailingSuite_StillSavesCache", projectPath: failingProjectDir, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := sdktest.NewServer(t)
+			srv.SetupEnv(t)
+
+			cacheDir := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
+
+			args := []string{"test", "--project-path", tt.projectPath(t), "--cache-path", cacheDir, "--checksum", "checksum-a"}
+
+			out, err := run(t, nil, args...)
+			if tt.wantErr {
+				assert.Assert(t, err != nil, "expected first run to fail, got: %s", out)
+			} else {
+				assert.NilError(t, err, "first run failed: %s", out)
+			}
+
+			assert.NilError(t, os.RemoveAll(cacheDir))
+
+			out, _ = run(t, nil, args...)
+
+			got, err := os.ReadFile(filepath.Join(cacheDir, "marker")) //nolint:gosec
+			assert.NilError(t, err, "second run output:\n%s", out)
+			assert.Equal(t, string(got), "hit", "expected build cache marker restored from a prior save")
+		})
+	}
+}
+
+// failingProjectDir writes a minimal module with a single always-failing test.
+func failingProjectDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module failtest\n\ngo 1.21\n"), 0600))
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "fail_test.go"), []byte(
+		"package failtest\n\nimport \"testing\"\n\nfunc TestAlwaysFails(t *testing.T) {\n\tt.Fatal(\"boom\")\n}\n"), 0600))
+	return dir
 }
 
 // goOnlyPATH returns a PATH directory containing only a symlink to the real

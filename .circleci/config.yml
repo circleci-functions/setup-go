@@ -98,6 +98,17 @@ jobs:
           command: |
             ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
             test -n "$(ls -A ~/.cache/golangci-lint)"
+      - run:
+          name: Save build cache
+          command: ./dist/setup-go/linux/amd64/setup-go cache save --go-build --checksum '{{ checksum "go.sum" }}'
+      - run:
+          name: Remove build cache
+          command: rm -rf "$(go env GOCACHE)"
+      - run:
+          name: Load build cache (expect hit)
+          command: |
+            ./dist/setup-go/linux/amd64/setup-go cache load --go-build --checksum '{{ checksum "go.sum" }}'
+            test -n "$(ls -A "$(go env GOCACHE)")"
 
   publish:
     executor: go
