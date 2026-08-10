@@ -3,9 +3,7 @@ package cache_test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -131,17 +129,6 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestBuildCacheDir checks BuildCacheDir against the real `go env GOCACHE`,
-// so wiring it to the wrong GoEnv field (e.g. GOMODCACHE) fails a test.
-func TestBuildCacheDir(t *testing.T) {
-	out, err := exec.Command("go", "env", "GOCACHE").Output()
-	assert.NilError(t, err)
-
-	dir, err := cache.BuildCacheDir()
-	assert.NilError(t, err)
-	assert.Equal(t, dir, strings.TrimSpace(string(out)))
 }
 
 // TestBuildCache_KeyIsDistinctFromLintCache verifies the build and lint caches

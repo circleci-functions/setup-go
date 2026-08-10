@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/circleci-functions/toolkit/sdk"
-
-	"github.com/circleci-functions/setup-go/goenv"
 )
 
 // cacheRotation is how often the lint and build cache keys rotate, forcing a
@@ -61,8 +59,20 @@ func lintCacheKey(key, checksum string) string {
 //
 //	v1-<key>-<tool>-<CIRCLE_JOB>-<arch>-<checksum>-<rotating epoch>
 func rotatingCacheKey(tool, key, checksum string) string {
-	rotation := time.Now().Unix() / int64(cacheRotation.Seconds()) * int64(cacheRotation.Seconds())
-	return fmt.Sprintf("v1-%s-%s-%s-%s-%s-%d", key, tool, os.Getenv("CIRCLE_JOB"), sdk.OSArch(), checksum, rotation)
+	return fmt.Sprintf("%s-%s-%d", cacheKeyBase(tool, key), checksum, rotationEpoch())
+}
+
+// cacheKeyBase is the job- and arch-scoped prefix a tool's cache keys share:
+// v1-<key>-<tool>-<CIRCLE_JOB>-<arch>. Ending on the arch token means a
+// truncated prefix can't collide across similarly named jobs — a "test" job's
+// base is not a prefix of a "test-integration" job's.
+func cacheKeyBase(tool, key string) string {
+	return fmt.Sprintf("v1-%s-%s-%s-%s", key, tool, os.Getenv("CIRCLE_JOB"), sdk.OSArch())
+}
+
+func rotationEpoch() int64 {
+	secs := int64(cacheRotation.Seconds())
+	return time.Now().Unix() / secs * secs
 }
 
 func RestoreGoModCache(ctx context.Context, client *sdk.Client, key, checksum string) {
@@ -82,22 +92,11 @@ func goModCacheKey(key, checksum string) string {
 	return fmt.Sprintf("v1-%s-go-mod-%s-%s", key, sdk.OSArch(), checksum)
 }
 
-// BuildCacheDir returns the go build cache directory as reported by
-// `go env GOCACHE`, rather than assuming ~/.cache/go-build (which is wrong on
-// darwin).
-func BuildCacheDir() (string, error) {
-	e, err := goenv.Load()
-	if err != nil {
-		return "", err
-	}
-	if e.GOCACHE == "" {
-		return "", fmt.Errorf("go env reported an empty GOCACHE")
-	}
-	return e.GOCACHE, nil
-}
-
+// RestoreBuildCache restores the go build cache (GOCACHE), trying the ordered
+// fallback keys from buildRestoreKeys so a rotation boundary or a dependency
+// bump warm-starts from a near miss instead of compiling from cold.
 func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{buildCacheKey(key, checksum)})
+	_, err := client.RestoreCache(ctx, buildRestoreKeys(key, checksum))
 	sdk.LogCacheErr("restore go build", err)
 }
 
@@ -111,4 +110,24 @@ func SaveBuildCache(ctx context.Context, client *sdk.Client, key, checksum, dir 
 //	v1-<< parameters.key >>-go-build-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
 func buildCacheKey(key, checksum string) string {
 	return rotatingCacheKey("go-build", key, checksum)
+}
+
+// buildRestoreKeys returns the keys a restore tries in order. CircleCI matches
+// each key as a prefix and takes the most recent entry matching the first key
+// that hits at all, so the list broadens as it goes:
+//
+//  1. exact — same deps, same rotation window
+//  2. same deps, any window — bridges a rotation boundary
+//  3. any deps — after a dependency bump only the changed modules recompile
+//
+// Entry 1 is the save key, so an exact round-trip still hits on a cache that
+// only matches exactly. Restoring an older cache is safe: GOCACHE is
+// content-addressed, so entries that no longer apply simply go unused.
+func buildRestoreKeys(key, checksum string) []string {
+	base := cacheKeyBase("go-build", key)
+	return []string{
+		buildCacheKey(key, checksum),
+		fmt.Sprintf("%s-%s-", base, checksum),
+		base + "-",
+	}
 }

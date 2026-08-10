@@ -139,7 +139,7 @@ func (t *testCmd) Run(ctx context.Context, client *sdk.Client) error {
 	// before the tests run rather than after.
 	buildCache := ""
 	if t.Cache {
-		dir, err := buildCacheDir(t.CachePath, "--cache-path")
+		dir, err := buildCacheDir(t.CachePath, "--cache-path", nil)
 		if err != nil {
 			return err
 		}
@@ -177,23 +177,23 @@ type cacheLoadCmd struct {
 
 type cacheSaveCmd struct {
 	cacheFlags
-	GoBuildPath *string `name:"go-build-path" help:"Override the go build cache directory (GOCACHE) to save, instead of detecting it via 'go env'."`
+	BuildPath *string `name:"build-path" help:"Override the go build cache directory (GOCACHE) to save, instead of detecting it via 'go env'."`
 }
 
 type cacheFlags struct {
 	// TODO(mang): implement this too.
 	// Test         bool   `help:"go test cache."`
 	GoMod        bool   `help:"go module cache." default:"false"`
-	GoBuild      bool   `name:"go-build" help:"go build cache (GOCACHE)." default:"false"`
+	Build        bool   `help:"go build cache (GOCACHE)." default:"false"`
 	GolangCILint bool   `name:"golangci-lint" help:"golangci-lint cache." default:"false"`
 	Key          string `help:"Optional cache key component to partition cache entries. If not set, defaults to the empty string."`
 	Checksum     string `help:"Optional checksum to partition the cache entry. Different checksums force a cache miss. If not set, defaults to the empty string."`
 }
 
-var errNoCacheTarget = fmt.Errorf("no cache target specified. Use --golangci-lint, --go-mod or --go-build")
+var errNoCacheTarget = fmt.Errorf("no cache target specified. Use --golangci-lint, --go-mod or --build")
 
 func (f *cacheFlags) anyTarget() bool {
-	return f.GolangCILint || f.GoMod || f.GoBuild
+	return f.GolangCILint || f.GoMod || f.Build
 }
 
 func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
@@ -205,7 +205,7 @@ func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
 		cache.RestoreGoModCache(ctx, client, l.Key, l.Checksum)
 	}
 
-	if l.GoBuild {
+	if l.Build {
 		cache.RestoreBuildCache(ctx, client, l.Key, l.Checksum)
 	}
 
@@ -221,16 +221,22 @@ func (s *cacheSaveCmd) Run(ctx context.Context, client *sdk.Client) error {
 		return errNoCacheTarget
 	}
 
-	if s.GoMod {
-		goEnv, err := goenv.Load()
-		if err != nil {
+	// Both --go-mod and --build read their directory from `go env`, so load it
+	// once instead of shelling out per target.
+	var goEnv *goenv.GoEnv
+	if s.GoMod || (s.Build && s.BuildPath == nil) {
+		var err error
+		if goEnv, err = goenv.Load(); err != nil {
 			return err
 		}
+	}
+
+	if s.GoMod {
 		cache.SaveGoModCache(ctx, client, s.Key, s.Checksum, goEnv.GOMODCACHE)
 	}
 
-	if s.GoBuild {
-		dir, err := buildCacheDir(s.GoBuildPath, "--go-build-path")
+	if s.Build {
+		dir, err := buildCacheDir(s.BuildPath, "--build-path", goEnv)
 		if err != nil {
 			return err
 		}
@@ -244,16 +250,27 @@ func (s *cacheSaveCmd) Run(ctx context.Context, client *sdk.Client) error {
 }
 
 // buildCacheDir resolves the go build cache directory, preferring an explicit
-// override over detection via `go env`. flag names the override flag, for the
-// error message.
-func buildCacheDir(override *string, flag string) (string, error) {
-	if override == nil {
-		return cache.BuildCacheDir()
+// override over `go env` (GOCACHE, not a hardcoded ~/.cache/go-build, which is
+// wrong on darwin). flag names the override flag, for the error message; env,
+// when non-nil, is a already-loaded `go env` to reuse.
+func buildCacheDir(override *string, flag string, env *goenv.GoEnv) (string, error) {
+	if override != nil {
+		if *override == "" {
+			return "", fmt.Errorf("must pass a non-empty directory with %s", flag)
+		}
+		return *override, nil
 	}
-	if *override == "" {
-		return "", fmt.Errorf("must pass a non-empty directory with %s", flag)
+
+	if env == nil {
+		var err error
+		if env, err = goenv.Load(); err != nil {
+			return "", err
+		}
 	}
-	return *override, nil
+	if env.GOCACHE == "" {
+		return "", fmt.Errorf("go env reported an empty GOCACHE")
+	}
+	return env.GOCACHE, nil
 }
 
 type modDownloadCmd struct {
