@@ -88,9 +88,13 @@ type testCmd struct {
 	FailFast     bool    `name:"failfast" help:"Do not start new tests after the first test failure."`
 	Count        *int    `help:"Run each test, benchmark, and fuzz seed n times. If n=1, test caching is disabled."`
 	UseGoTestSum bool    `name:"use-gotestsum" help:"Run via gotestsum instead of go test. Requires gotestsum on PATH."`
+	Cache        bool    `help:"Set to false to skip restoring and saving the go build cache." default:"true"`
+	CacheKey     string  `help:"Optional cache key component to partition cache entries. If not set, defaults to the empty string."`
+	Checksum     string  `help:"Optional checksum to partition the cache entry. If not set, defaults to the empty string."`
+	CachePath    *string `help:"Override the go build cache directory (GOCACHE) to save/restore, instead of detecting it via 'go env'."`
 }
 
-func (t *testCmd) Run(ctx context.Context, _ *sdk.Client) error {
+func (t *testCmd) Run(ctx context.Context, client *sdk.Client) error {
 	if _, err := exec.LookPath("go"); err != nil {
 		return err
 	}
@@ -131,12 +135,32 @@ func (t *testCmd) Run(ctx context.Context, _ *sdk.Client) error {
 		args = append([]string{"--"}, args[1:]...)
 	}
 
+	// Resolved up front so a bad --cache-path or an unusable `go env` fails
+	// before the tests run rather than after.
+	buildCache := ""
+	if t.Cache {
+		dir, err := buildCacheDir(t.CachePath, "--cache-path")
+		if err != nil {
+			return err
+		}
+		buildCache = dir
+		cache.RestoreBuildCache(ctx, client, t.CacheKey, t.Checksum)
+	}
+
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = projectPath
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go test: %w", err)
+	testErr := cmd.Run()
+
+	// Saved even when the tests fail: a failed run still compiled packages a
+	// re-run can reuse.
+	if t.Cache {
+		cache.SaveBuildCache(ctx, client, t.CacheKey, t.Checksum, buildCache)
+	}
+
+	if testErr != nil {
+		return fmt.Errorf("go test: %w", testErr)
 	}
 
 	return nil
@@ -153,25 +177,36 @@ type cacheLoadCmd struct {
 
 type cacheSaveCmd struct {
 	cacheFlags
+	GoBuildPath *string `name:"go-build-path" help:"Override the go build cache directory (GOCACHE) to save, instead of detecting it via 'go env'."`
 }
 
 type cacheFlags struct {
-	// TODO(mang): implement these too.
+	// TODO(mang): implement this too.
 	// Test         bool   `help:"go test cache."`
-	// Build        bool   `help:"go build cache."`
 	GoMod        bool   `help:"go module cache." default:"false"`
+	GoBuild      bool   `name:"go-build" help:"go build cache (GOCACHE)." default:"false"`
 	GolangCILint bool   `name:"golangci-lint" help:"golangci-lint cache." default:"false"`
 	Key          string `help:"Optional cache key component to partition cache entries. If not set, defaults to the empty string."`
 	Checksum     string `help:"Optional checksum to partition the cache entry. Different checksums force a cache miss. If not set, defaults to the empty string."`
 }
 
+var errNoCacheTarget = fmt.Errorf("no cache target specified. Use --golangci-lint, --go-mod or --go-build")
+
+func (f *cacheFlags) anyTarget() bool {
+	return f.GolangCILint || f.GoMod || f.GoBuild
+}
+
 func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
-	if !l.GolangCILint && !l.GoMod {
-		return fmt.Errorf("no cache target specified. Use --golangci-lint or --go-mod")
+	if !l.anyTarget() {
+		return errNoCacheTarget
 	}
 
 	if l.GoMod {
 		cache.RestoreGoModCache(ctx, client, l.Key, l.Checksum)
+	}
+
+	if l.GoBuild {
+		cache.RestoreBuildCache(ctx, client, l.Key, l.Checksum)
 	}
 
 	if l.GolangCILint {
@@ -182,8 +217,8 @@ func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
 }
 
 func (s *cacheSaveCmd) Run(ctx context.Context, client *sdk.Client) error {
-	if !s.GolangCILint && !s.GoMod {
-		return fmt.Errorf("no cache target specified. Use --golangci-lint or --go-mod")
+	if !s.anyTarget() {
+		return errNoCacheTarget
 	}
 
 	if s.GoMod {
@@ -194,10 +229,31 @@ func (s *cacheSaveCmd) Run(ctx context.Context, client *sdk.Client) error {
 		cache.SaveGoModCache(ctx, client, s.Key, s.Checksum, goEnv.GOMODCACHE)
 	}
 
+	if s.GoBuild {
+		dir, err := buildCacheDir(s.GoBuildPath, "--go-build-path")
+		if err != nil {
+			return err
+		}
+		cache.SaveBuildCache(ctx, client, s.Key, s.Checksum, dir)
+	}
+
 	if s.GolangCILint {
 		cache.SaveLintCache(ctx, client, s.Key, s.Checksum)
 	}
 	return nil
+}
+
+// buildCacheDir resolves the go build cache directory, preferring an explicit
+// override over detection via `go env`. flag names the override flag, for the
+// error message.
+func buildCacheDir(override *string, flag string) (string, error) {
+	if override == nil {
+		return cache.BuildCacheDir()
+	}
+	if *override == "" {
+		return "", fmt.Errorf("must pass a non-empty directory with %s", flag)
+	}
+	return *override, nil
 }
 
 type modDownloadCmd struct {

@@ -89,15 +89,26 @@ steps:
 | `--failfast` | false | Stop after the first test failure |
 | `--count` | (go default) | Run each test, benchmark, and fuzz seed N times. `1` disables test caching. |
 | `--use-gotestsum` | false | Run via `gotestsum` instead of `go test`. Requires `gotestsum` on `PATH`. |
+| `--cache` | true | Restore the go build cache before the run and save it after. Set to `false` to skip. |
+| `--cache-key` | (empty) | Optional cache key component to partition cache entries. |
+| `--checksum` | (empty) | Optional checksum to partition the cache entry. |
+| `--cache-path` | (empty) | Override the go build cache directory (`GOCACHE`) to save/restore, instead of detecting it via `go env`. Must not be set to an empty string. |
+
+The build cache is saved even when tests fail, since a failed run still
+compiled packages a re-run can reuse. It uses the same key as
+`cache save --go-build` (below), so a `test` run and a separate `cache load
+--go-build` step share entries when `--cache-key`/`--checksum` match.
 
 ## cache
 
 ### What it does
 
-`cache load` and `cache save` restore/save a tool's cache directory to/from the
+`cache load` and `cache save` restore/save a cache directory to/from the
 CircleCI job cache, for use around a separate step that runs the tool itself.
-Currently supports golangci-lint's cache directory (`~/.cache/golangci-lint`),
-selected with `--golangci-lint`; other targets may be added later.
+Supported targets: golangci-lint's cache directory
+(`~/.cache/golangci-lint`, `--golangci-lint`), the go build cache
+(`go env GOCACHE`, `--go-build`) and the go module cache
+(`go env GOMODCACHE`, `--go-mod`).
 
 ```yaml
 steps:
@@ -112,19 +123,46 @@ steps:
       command: circleci run setup-go@<version> -- cache save --golangci-lint --checksum '{{ checksum "go.sum" }}'
 ```
 
+Targets can be combined in a single call:
+
+```yaml
+steps:
+  - run:
+      name: Restore caches
+      command: circleci run setup-go@<version> -- cache load --go-build --go-mod --checksum '{{ checksum "go.sum" }}'
+  - run: go build ./...
+  - run:
+      name: Save caches
+      command: circleci run setup-go@<version> -- cache save --go-build --go-mod --checksum '{{ checksum "go.sum" }}'
+```
+
 ### Flags
 
 `cache load` and `cache save` take the same flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--golangci-lint` | false | Select golangci-lint's cache directory as the target. Required — `cache load`/`cache save` error if no target is given. |
+| `--golangci-lint` | false | Select golangci-lint's cache directory as a target. |
+| `--go-build` | false | Select the go build cache (`GOCACHE`) as a target. |
+| `--go-mod` | false | Select the go module cache (`GOMODCACHE`) as a target. |
 | `--key` | (empty) | Optional cache key component to partition cache entries. |
 | `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
+| `--go-build-path` | (empty) | `cache save` only: override the directory saved for `--go-build`, instead of detecting it via `go env`. Must not be set to an empty string. |
 
-The cache key mirrors the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s
-golangci-lint cache key: `v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>`.
-Cache errors (e.g. running outside a job) are non-fatal.
+At least one target is required — `cache load`/`cache save` error if none is given.
+
+The cache keys mirror the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s:
+
+| Target | Key |
+|--------|-----|
+| `--golangci-lint` | `v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
+| `--go-build` | `v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
+| `--go-mod` | `v1-<key>-go-mod-<arch>-<checksum>` |
+
+The build cache directory comes from `go env GOCACHE` rather than a hardcoded
+`~/.cache/go-build`, so it is also correct on darwin
+(`~/Library/Caches/go-build`). Cache errors (e.g. running outside a job) are
+non-fatal.
 
 ## mod-download
 
