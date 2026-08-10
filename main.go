@@ -156,9 +156,9 @@ type cacheSaveCmd struct {
 }
 
 type cacheFlags struct {
-	// TODO(mang): implement these too.
+	// TODO(mang): implement the test cache too.
 	// Test         bool   `help:"go test cache."`
-	// Build        bool   `help:"go build cache."`
+	Build        bool   `help:"go build cache (GOCACHE)." default:"false"`
 	GoMod        bool   `help:"go module cache." default:"false"`
 	GolangCILint bool   `name:"golangci-lint" help:"golangci-lint cache." default:"false"`
 	Key          string `help:"Optional cache key component to partition cache entries. If not set, defaults to the empty string."`
@@ -166,12 +166,16 @@ type cacheFlags struct {
 }
 
 func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
-	if !l.GolangCILint && !l.GoMod {
-		return fmt.Errorf("no cache target specified. Use --golangci-lint or --go-mod")
+	if !l.GolangCILint && !l.GoMod && !l.Build {
+		return fmt.Errorf("no cache target specified. Use --golangci-lint, --go-mod, or --build")
 	}
 
 	if l.GoMod {
 		cache.RestoreGoModCache(ctx, client, l.Key, l.Checksum)
+	}
+
+	if l.Build {
+		cache.RestoreGoBuildCache(ctx, client, l.Key, l.Checksum)
 	}
 
 	if l.GolangCILint {
@@ -182,16 +186,25 @@ func (l *cacheLoadCmd) Run(ctx context.Context, client *sdk.Client) error {
 }
 
 func (s *cacheSaveCmd) Run(ctx context.Context, client *sdk.Client) error {
-	if !s.GolangCILint && !s.GoMod {
-		return fmt.Errorf("no cache target specified. Use --golangci-lint or --go-mod")
+	if !s.GolangCILint && !s.GoMod && !s.Build {
+		return fmt.Errorf("no cache target specified. Use --golangci-lint, --go-mod, or --build")
+	}
+
+	// Both --go-mod and --build need a `go env` lookup; load it once.
+	var goEnv *goenv.GoEnv
+	if s.GoMod || s.Build {
+		var err error
+		if goEnv, err = goenv.Load(); err != nil {
+			return err
+		}
 	}
 
 	if s.GoMod {
-		goEnv, err := goenv.Load()
-		if err != nil {
-			return err
-		}
 		cache.SaveGoModCache(ctx, client, s.Key, s.Checksum, goEnv.GOMODCACHE)
+	}
+
+	if s.Build {
+		cache.SaveGoBuildCache(ctx, client, s.Key, s.Checksum, goEnv.GOCACHE)
 	}
 
 	if s.GolangCILint {

@@ -71,3 +71,66 @@ func SaveGoModCache(ctx context.Context, client *sdk.Client, key, checksum, dir 
 func goModCacheKey(key, checksum string) string {
 	return fmt.Sprintf("v1-%s-go-mod-%s-%s", key, sdk.OSArch(), checksum)
 }
+
+// buildCacheRotation is how often the go build cache key's rotation window
+// advances. The dependency portion of GOCACHE — the bulk of what's compiled —
+// is captured deterministically by the go.sum checksum in the key. The
+// rotation is a second axis that absorbs drift in our *own* source, which we
+// can't cheaply checksum: each window saves a fresh cache, bounding staleness.
+const buildCacheRotation = 72 * time.Hour
+
+// RestoreGoBuildCache restores the go build cache (GOCACHE) from the CircleCI
+// job cache, trying the ordered fallback keys from goBuildRestoreKeys so a new
+// rotation window or a dependency bump restores a warm cache rather than going
+// cold. Best-effort: a cache-call failure is logged and never blocks the build.
+func RestoreGoBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
+	_, err := client.RestoreCache(ctx, goBuildRestoreKeys(key, checksum))
+	sdk.LogCacheErr("restore go build", err)
+}
+
+// SaveGoBuildCache saves dir (GOCACHE) under the exact key for the current
+// window and go.sum checksum. The key is write-once; the next build in the
+// same window is a no-op save and restores this one via the exact fallback.
+func SaveGoBuildCache(ctx context.Context, client *sdk.Client, key, checksum, dir string) {
+	err := client.SaveCache(ctx, goBuildSaveKey(key, checksum), []string{dir})
+	sdk.LogCacheErr("save go build", err)
+}
+
+// goBuildCacheBase is the job- and arch-scoped prefix every build cache key
+// shares: v1-<key>-go-build-<CIRCLE_JOB>-<arch>. Job precedes arch so the
+// broadest restore fallback (goBuildRestoreKeys' last entry) truncates on the
+// fixed arch token — a job named "test" can't prefix-collide with
+// "test-integration".
+func goBuildCacheBase(key string) string {
+	return fmt.Sprintf("v1-%s-go-build-%s-%s", key, os.Getenv("CIRCLE_JOB"), sdk.OSArch())
+}
+
+// goBuildSaveKey is the exact key a build saves under: base, go.sum checksum,
+// and the current rotation window.
+func goBuildSaveKey(key, checksum string) string {
+	return fmt.Sprintf("%s-%s-%d", goBuildCacheBase(key), checksum, buildRotationEpoch())
+}
+
+// goBuildRestoreKeys returns the ordered fallback list a restore tries. Real
+// CircleCI restore does prefix matching and returns the most recent entry that
+// matches the first key with any hit:
+//
+//  1. exact — same deps, same window (also the same-commit retry case)
+//  2. same deps, any window — bridges the rotation boundary
+//  3. any deps — after a dep bump, only the changed modules recompile; the rest stay warm
+//
+// The save key equals entry 1, so an exact round-trip hits even on a cache
+// server that only exact-matches.
+func goBuildRestoreKeys(key, checksum string) []string {
+	base := goBuildCacheBase(key)
+	return []string{
+		fmt.Sprintf("%s-%s-%d", base, checksum, buildRotationEpoch()),
+		fmt.Sprintf("%s-%s-", base, checksum),
+		base + "-",
+	}
+}
+
+func buildRotationEpoch() int64 {
+	secs := int64(buildCacheRotation.Seconds())
+	return time.Now().Unix() / secs * secs
+}

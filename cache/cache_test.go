@@ -140,3 +140,36 @@ func TestGoModCache_CacheErrorIsNonFatal(t *testing.T) {
 	cache.RestoreGoModCache(ctx, client, "", "checksum-a")
 	cache.SaveGoModCache(ctx, client, "", "checksum-a", t.TempDir())
 }
+
+// TestGoBuildCache_RoundTrip verifies that saving the build cache dir and then
+// restoring it with the same key/checksum round-trips a marker file. This hits
+// the exact (tier 1) restore key, which equals the save key — the only tier a
+// cache server that exact-matches (like sdktest) can exercise. The prefix
+// fallback tiers are covered structurally by TestGoBuildRestoreKeys_Fallback.
+func TestGoBuildCache_RoundTrip(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	client := srv.Client()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("hit"), 0600))
+
+	cache.SaveGoBuildCache(ctx, client, "", "checksum-a", dir)
+	assert.NilError(t, os.RemoveAll(dir))
+
+	cache.RestoreGoBuildCache(ctx, client, "", "checksum-a")
+
+	got, err := os.ReadFile(filepath.Join(dir, "marker")) //nolint:gosec
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "hit")
+}
+
+// TestGoBuildCache_CacheErrorIsNonFatal verifies that a client which can't
+// reach a server never blocks restore/save.
+func TestGoBuildCache_CacheErrorIsNonFatal(t *testing.T) {
+	client := sdk.NewWithBaseURL("http://127.0.0.1:0")
+	ctx := context.Background()
+
+	cache.RestoreGoBuildCache(ctx, client, "", "checksum-a")
+	cache.SaveGoBuildCache(ctx, client, "", "checksum-a", t.TempDir())
+}

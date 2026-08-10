@@ -96,8 +96,16 @@ steps:
 
 `cache load` and `cache save` restore/save a tool's cache directory to/from the
 CircleCI job cache, for use around a separate step that runs the tool itself.
-Currently supports golangci-lint's cache directory (`~/.cache/golangci-lint`),
-selected with `--golangci-lint`; other targets may be added later.
+Supported targets:
+
+- `--golangci-lint` — golangci-lint's cache directory (`~/.cache/golangci-lint`).
+- `--build` — the Go build cache (`GOCACHE`, e.g. `~/.cache/go-build`), which
+  holds compiled package objects and cached test results. The directory is
+  discovered via `go env GOCACHE`, so `go` must be on `PATH` when saving.
+  Pass `--checksum '{{ checksum "go.sum" }}'`: dependencies are the bulk of what
+  gets compiled, and go.sum keys them deterministically.
+
+At least one target is required. Other targets may be added later.
 
 ```yaml
 steps:
@@ -118,13 +126,32 @@ steps:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--golangci-lint` | false | Select golangci-lint's cache directory as the target. Required — `cache load`/`cache save` error if no target is given. |
+| `--golangci-lint` | false | Select golangci-lint's cache directory as the target. |
+| `--build` | false | Select the Go build cache (`GOCACHE`) as the target. |
 | `--key` | (empty) | Optional cache key component to partition cache entries. |
 | `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
 
-The cache key mirrors the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s
-golangci-lint cache key: `v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>`.
-Cache errors (e.g. running outside a job) are non-fatal.
+At least one target (`--golangci-lint` or `--build`) is required — `cache load`/`cache save` error if no target is given.
+
+The golangci-lint cache key mirrors the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s:
+`v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>`.
+
+The **build cache** saves under an exact per-window key
+`v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` and
+restores with an ordered fallback so a new window or a dependency bump stays
+warm instead of going cold:
+
+1. exact — same dependencies (`<checksum>`) and same 72h window; also the same-commit retry case.
+2. `…-<checksum>-` — same dependencies, any window: bridges the rotation boundary.
+3. `…-go-build-<CIRCLE_JOB>-<arch>-` — any dependencies: after a `go.sum` bump, only
+   the changed modules recompile; every unchanged dependency object stays warm.
+
+The `<checksum>` (go.sum) captures the dependency portion deterministically; the
+72h rotation is a second axis that periodically refreshes to absorb drift in
+your own source, which can't be cheaply checksummed. The key is scoped per job
+(different jobs compile different things) and per arch; the Go version is
+deliberately omitted because Go's build cache self-invalidates by compiler
+version. Cache errors (e.g. running outside a job) are non-fatal.
 
 ## mod-download
 
