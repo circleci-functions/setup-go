@@ -96,8 +96,8 @@ steps:
 
 The build cache is saved even when tests fail, since a failed run still
 compiled packages a re-run can reuse. It uses the same key as
-`cache save --go-build` (below), so a `test` run and a separate `cache load
---go-build` step share entries when `--cache-key`/`--checksum` match.
+`cache save --build` (below), so a `test` run and a separate `cache load
+--build` step share entries when `--cache-key`/`--checksum` match.
 
 ## cache
 
@@ -107,7 +107,7 @@ compiled packages a re-run can reuse. It uses the same key as
 CircleCI job cache, for use around a separate step that runs the tool itself.
 Supported targets: golangci-lint's cache directory
 (`~/.cache/golangci-lint`, `--golangci-lint`), the go build cache
-(`go env GOCACHE`, `--go-build`) and the go module cache
+(`go env GOCACHE`, `--build`) and the go module cache
 (`go env GOMODCACHE`, `--go-mod`).
 
 ```yaml
@@ -129,11 +129,11 @@ Targets can be combined in a single call:
 steps:
   - run:
       name: Restore caches
-      command: circleci run setup-go@<version> -- cache load --go-build --go-mod --checksum '{{ checksum "go.sum" }}'
+      command: circleci run setup-go@<version> -- cache load --build --go-mod --checksum '{{ checksum "go.sum" }}'
   - run: go build ./...
   - run:
       name: Save caches
-      command: circleci run setup-go@<version> -- cache save --go-build --go-mod --checksum '{{ checksum "go.sum" }}'
+      command: circleci run setup-go@<version> -- cache save --build --go-mod --checksum '{{ checksum "go.sum" }}'
 ```
 
 ### Flags
@@ -143,11 +143,11 @@ steps:
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--golangci-lint` | false | Select golangci-lint's cache directory as a target. |
-| `--go-build` | false | Select the go build cache (`GOCACHE`) as a target. |
+| `--build` | false | Select the go build cache (`GOCACHE`) as a target. |
 | `--go-mod` | false | Select the go module cache (`GOMODCACHE`) as a target. |
 | `--key` | (empty) | Optional cache key component to partition cache entries. |
 | `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
-| `--go-build-path` | (empty) | `cache save` only: override the directory saved for `--go-build`, instead of detecting it via `go env`. Must not be set to an empty string. |
+| `--build-path` | (empty) | `cache save` only: override the directory saved for `--build`, instead of detecting it via `go env`. Must not be set to an empty string. |
 
 At least one target is required — `cache load`/`cache save` error if none is given.
 
@@ -156,13 +156,24 @@ The cache keys mirror the [`circleci/go` orb](https://circleci.com/developer/orb
 | Target | Key |
 |--------|-----|
 | `--golangci-lint` | `v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
-| `--go-build` | `v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
+| `--build` | `v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
 | `--go-mod` | `v1-<key>-go-mod-<arch>-<checksum>` |
 
 The build cache directory comes from `go env GOCACHE` rather than a hardcoded
 `~/.cache/go-build`, so it is also correct on darwin
 (`~/Library/Caches/go-build`). Cache errors (e.g. running outside a job) are
 non-fatal.
+
+`--build` saves under the exact key above, but restores try three keys in order
+so a near miss still warm-starts the build instead of compiling from cold:
+
+1. the exact key — same dependencies, same rotation window
+2. `…-<checksum>-` — same dependencies, any window, bridging a rotation boundary
+3. `…-<arch>-` — any dependencies, so a `go.sum` bump only recompiles the
+   modules that actually changed
+
+Restoring an older build cache is safe: `GOCACHE` is content-addressed, so
+entries that no longer apply are simply never read.
 
 ## mod-download
 
