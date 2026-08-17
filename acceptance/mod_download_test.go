@@ -17,7 +17,7 @@ import (
 func TestCLI_ModDownload_CacheRoundTrip(t *testing.T) {
 	requireRealTaskAgent(t)
 
-	modCache := t.TempDir()
+	modCache := writableModCacheDir(t)
 	key := uniqueKey(t)
 	dir := fixtureDir(t, "mod-project")
 	env := map[string]string{"GOMODCACHE": modCache}
@@ -37,7 +37,10 @@ func TestCLI_ModDownload_CacheRoundTrip(t *testing.T) {
 	_, err = os.Stat(filepath.Join(modCache, "cache", "download", "github.com", "google", "go-cmp", "@v"))
 	assert.NilError(t, err, "expected go mod download to populate GOMODCACHE, got:\n%s", dirTree(t, modCache))
 
-	assert.NilError(t, os.RemoveAll(modCache))
+	// go mod download extracts the real module source tree read-only (part of
+	// Go's module cache immutability guarantee), so a plain RemoveAll would
+	// fail here — chmod everything writable first.
+	assert.NilError(t, removeAll(t, modCache))
 
 	out, err = runIn(t, dir, env, args...)
 	assert.NilError(t, err, "second run failed:\n%s", out)
@@ -59,7 +62,7 @@ func TestCLI_ModDownload_CacheRoundTrip(t *testing.T) {
 func TestCLI_ModDownload_NoCache_DoesNotSaveModCache(t *testing.T) {
 	requireRealTaskAgent(t)
 
-	modCache := t.TempDir()
+	modCache := writableModCacheDir(t)
 	key := uniqueKey(t)
 	env := map[string]string{"GOMODCACHE": modCache}
 
@@ -68,7 +71,7 @@ func TestCLI_ModDownload_NoCache_DoesNotSaveModCache(t *testing.T) {
 	assert.NilError(t, err, "got: %s", out)
 	assertNoCacheErrors(t, out)
 
-	assert.NilError(t, os.RemoveAll(modCache))
+	assert.NilError(t, removeAll(t, modCache))
 
 	out, err = run(t, nil, "cache", "load", "--go-mod", "--key", key, "--checksum", "checksum-a")
 	assert.NilError(t, err, "load failed: %s", out)
@@ -85,7 +88,7 @@ func TestCLI_ModDownload_NoCache_DoesNotSaveModCache(t *testing.T) {
 func TestCLI_ModDownload_PathOverridesDetectedModCache(t *testing.T) {
 	requireRealTaskAgent(t)
 
-	detected, override := t.TempDir(), t.TempDir()
+	detected, override := writableModCacheDir(t), t.TempDir()
 	writeMarker(t, override, "override")
 	key := uniqueKey(t)
 	env := map[string]string{"GOMODCACHE": detected}
@@ -95,7 +98,9 @@ func TestCLI_ModDownload_PathOverridesDetectedModCache(t *testing.T) {
 	assert.NilError(t, err, "got: %s", out)
 	assertNoCacheErrors(t, out)
 
-	assert.NilError(t, os.RemoveAll(detected))
+	// detected received a real `go mod download`, which extracts the module
+	// source tree read-only — chmod it writable before removing.
+	assert.NilError(t, removeAll(t, detected))
 	assert.NilError(t, os.RemoveAll(override))
 
 	out, err = run(t, nil, "cache", "load", "--go-mod", "--key", key, "--checksum", "checksum-a")

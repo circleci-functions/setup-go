@@ -213,6 +213,48 @@ func writeMarker(t *testing.T, dir, content string) {
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte(content), 0600))
 }
 
+// chmodWritable recursively makes dir and everything under it writable. Go's
+// real module cache marks extracted module directories and files read-only
+// (part of its content-addressed immutability guarantee), and that
+// read-only-ness survives a cache save/restore round-trip — so a plain
+// os.RemoveAll on a directory that ever held GOMODCACHE fails with
+// "permission denied" trying to unlink inside a read-only parent.
+func chmodWritable(t *testing.T, dir string) {
+	t.Helper()
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort: only used to unblock a later RemoveAll
+		}
+		mode := os.FileMode(0o644)
+		if d.IsDir() {
+			mode = 0o755
+		}
+		_ = os.Chmod(path, mode) //nolint:gosec // best-effort chmod of our own test-owned temp dir, only to unblock a later RemoveAll
+		return nil
+	})
+}
+
+// removeAll is os.RemoveAll preceded by chmodWritable, for directories that
+// might hold real Go module cache content.
+func removeAll(t *testing.T, dir string) error {
+	t.Helper()
+	chmodWritable(t, dir)
+	return os.RemoveAll(dir)
+}
+
+// writableModCacheDir is t.TempDir(), pre-registering a cleanup step that
+// chmods the directory tree writable before Go's own TempDir cleanup removes
+// it. Use this (rather than a bare t.TempDir()) for any directory that might
+// end up holding real GOMODCACHE content, so the automatic end-of-test
+// removal doesn't fail on read-only module directories left behind by the
+// final run in a test.
+func writableModCacheDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() { chmodWritable(t, dir) })
+	return dir
+}
+
 // dirTree renders a recursive listing of dir, for use in assertion failure
 // messages. Cache save/restore output goes to a separate CircleCI step, not
 // this binary's stdout, so a bare "marker missing" message gives no way to
