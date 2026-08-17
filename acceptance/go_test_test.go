@@ -2,30 +2,17 @@ package setupgo_test
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
-// fixtureDir resolves acceptance/test-project to an absolute path. The
-// compiled setup-go binary is run with its own temp directory as its working
-// directory (see runner.Runner.cmdDir), so a relative --project-path would
-// resolve against the wrong directory.
-func fixtureDir(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs("test-project")
-	assert.NilError(t, err)
-	return abs
-}
-
 // TestCLI_Test exercises the `test` subcommand's CLI contract via a table of
-// cases, each providing its own env/args setup and expectations on the
-// exit error and captured output.
+// cases, each providing its own env/args setup and expectations on the exit
+// error and captured output. Cases not about caching pass --cache=false so
+// they don't make a pointless real cache round-trip on every run.
 func TestCLI_Test(t *testing.T) {
 	tests := []struct {
 		name string
@@ -42,7 +29,7 @@ func TestCLI_Test(t *testing.T) {
 			// underlying `go test ./...` run reports both packages as passing.
 			name: "RunsGoTestSuite",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return nil, []string{"test", "--project-path", fixtureDir(t)}
+				return nil, []string{"test", "--project-path", fixtureDir(t, "test-project"), "--cache=false"}
 			},
 			contains: []string{"numbers", "words"},
 		},
@@ -52,11 +39,17 @@ func TestCLI_Test(t *testing.T) {
 			// pointing HOME at the tracked fixture directly, since `go test`
 			// also derives its default build/test cache locations from $HOME
 			// and would otherwise leave cache directories inside the repo.
+			// GOCACHE/GOMODCACHE are pinned to the real ones so redirecting
+			// HOME doesn't cold-start a stdlib rebuild.
 			name: "ProjectPathDefaultsToHome",
 			setup: func(t *testing.T) (map[string]string, []string) {
 				home := t.TempDir()
-				assert.NilError(t, os.CopyFS(home, os.DirFS(fixtureDir(t))))
-				return map[string]string{"HOME": home}, []string{"test"}
+				assert.NilError(t, os.CopyFS(home, os.DirFS(fixtureDir(t, "test-project"))))
+				return map[string]string{
+					"HOME":       home,
+					"GOCACHE":    goEnv(t, "GOCACHE"),
+					"GOMODCACHE": goEnv(t, "GOMODCACHE"),
+				}, []string{"test", "--cache=false"}
 			},
 			contains: []string{"numbers", "words"},
 		},
@@ -65,25 +58,24 @@ func TestCLI_Test(t *testing.T) {
 			// without error on a passing suite.
 			name: "FailFastAndCountFlags",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return nil, []string{"test", "--project-path", fixtureDir(t), "--failfast", "--count=2"}
+				return nil, []string{"test", "--project-path", fixtureDir(t, "test-project"), "--failfast", "--count=2", "--cache=false"}
 			},
 		},
 		{
 			// Verifies --covermode passes through to `go test`.
 			name: "CoverModeFlag",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return nil, []string{"test", "--project-path", fixtureDir(t), "--covermode", "count"}
+				return nil, []string{"test", "--project-path", fixtureDir(t, "test-project"), "--covermode", "count", "--cache=false"}
 			},
 			contains: []string{"coverage:"},
 		},
 		{
 			// Relies on a real C toolchain being present to build the race
 			// detector runtime — true in CI's cimg/go image and on any
-			// standard dev machine (the same assumption other setup-go
-			// acceptance tests make about cgo availability).
+			// standard dev machine.
 			name: "RaceFlag",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return nil, []string{"test", "--project-path", fixtureDir(t), "--race"}
+				return nil, []string{"test", "--project-path", fixtureDir(t, "test-project"), "--race", "--cache=false"}
 			},
 		},
 		{
@@ -91,7 +83,7 @@ func TestCLI_Test(t *testing.T) {
 			// non-zero exit.
 			name: "FailingTests_ReturnsError",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return nil, []string{"test", "--project-path", failingProjectDir(t)}
+				return nil, []string{"test", "--project-path", failingProjectDir(t), "--cache=false"}
 			},
 			wantErr:  true,
 			contains: []string{"FAIL"},
@@ -109,7 +101,7 @@ func TestCLI_Test(t *testing.T) {
 			// run anything.
 			name: "NoGoOnPath",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return map[string]string{"PATH": t.TempDir()}, []string{"test", "--project-path", fixtureDir(t)}
+				return map[string]string{"PATH": t.TempDir()}, []string{"test", "--project-path", fixtureDir(t, "test-project"), "--cache=false"}
 			},
 			wantErr: true,
 		},
@@ -118,22 +110,22 @@ func TestCLI_Test(t *testing.T) {
 			// reachable, rather than silently falling back to plain `go test`.
 			name: "UseGoTestSum_NotOnPath",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return map[string]string{"PATH": goOnlyPATH(t)},
-					[]string{"test", "--project-path", fixtureDir(t), "--use-gotestsum"}
+				return map[string]string{"PATH": goBinDir(t)},
+					[]string{"test", "--project-path", fixtureDir(t, "test-project"), "--use-gotestsum", "--cache=false"}
 			},
 			wantErr: true,
 		},
 		{
-			// Verifies --use-gotestsum invokes gotestsum (rather than go test
-			// directly) with the expected trailing args. gotestsum is only a
-			// go.mod tool dependency here, not installed on PATH, so this
-			// stubs it with a script that forwards straight through to `go test`.
+			// Verifies --use-gotestsum invokes a real gotestsum (rather than
+			// go test directly). gotestsum's own "DONE" summary line proves
+			// gotestsum ran — something a forwarding stub couldn't distinguish
+			// from plain `go test`.
 			name: "UseGoTestSum_Passthrough",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				return map[string]string{"PATH": gotestsumStubPATH(t)},
-					[]string{"test", "--project-path", fixtureDir(t), "--use-gotestsum"}
+				return map[string]string{"PATH": gotestsumPATH(t)},
+					[]string{"test", "--project-path", fixtureDir(t, "test-project"), "--use-gotestsum", "--cache=false"}
 			},
-			contains: []string{"numbers", "words"},
+			contains: []string{"numbers", "words", "DONE"},
 		},
 	}
 
@@ -161,26 +153,29 @@ func TestCLI_Test(t *testing.T) {
 // cache before running and saves it afterwards — including when the tests
 // fail, since a failed run still compiled packages a re-run can reuse.
 // --cache-path points the save at a temp dir so the test never touches the
-// executor's real GOCACHE.
+// executor's real GOCACHE. --cache-key is unique per subtest: without it the
+// second subtest's save would be skipped as a duplicate of the first
+// subtest's immutable key, and its restore would return the first subtest's
+// bytes.
 func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 	tests := []struct {
 		name        string
 		projectPath func(t *testing.T) string
 		wantErr     bool
 	}{
-		{name: "PassingSuite", projectPath: fixtureDir},
+		{name: "PassingSuite", projectPath: func(t *testing.T) string { return fixtureDir(t, "test-project") }},
 		{name: "FailingSuite_StillSavesCache", projectPath: failingProjectDir, wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := sdktest.NewServer(t)
-			srv.SetupEnv(t)
+			taskAgent(t)
 
 			cacheDir := t.TempDir()
-			assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
+			key := uniqueKey(t)
+			writeMarker(t, cacheDir, "hit")
 
-			args := []string{"test", "--project-path", tt.projectPath(t), "--cache-path", cacheDir, "--checksum", "checksum-a"}
+			args := []string{"test", "--project-path", tt.projectPath(t), "--cache-path", cacheDir, "--cache-key", key, "--checksum", "checksum-a"}
 
 			out, err := run(t, nil, args...)
 			if tt.wantErr {
@@ -188,10 +183,12 @@ func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 			} else {
 				assert.NilError(t, err, "first run failed: %s", out)
 			}
+			assertNoCacheErrors(t, out)
 
 			assert.NilError(t, os.RemoveAll(cacheDir))
 
 			out, _ = run(t, nil, args...)
+			assertNoCacheErrors(t, out)
 
 			got, err := os.ReadFile(filepath.Join(cacheDir, "marker")) //nolint:gosec
 			assert.NilError(t, err, "second run output:\n%s", out)
@@ -208,34 +205,4 @@ func failingProjectDir(t *testing.T) string {
 	assert.NilError(t, os.WriteFile(filepath.Join(dir, "fail_test.go"), []byte(
 		"package failtest\n\nimport \"testing\"\n\nfunc TestAlwaysFails(t *testing.T) {\n\tt.Fatal(\"boom\")\n}\n"), 0600))
 	return dir
-}
-
-// goOnlyPATH returns a PATH directory containing only a symlink to the real
-// go binary — no gotestsum, no other tools.
-func goOnlyPATH(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	symlinkTool(t, dir, "go")
-	return dir
-}
-
-// gotestsumStubPATH returns a PATH directory containing a symlink to the real
-// go binary plus a "gotestsum" stub script. setup-go invokes the stub as
-// `gotestsum -- <go test args>`; the stub drops the leading "--" and execs
-// `go test` with the rest, so the fixture's real test output comes back.
-func gotestsumStubPATH(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	symlinkTool(t, dir, "go")
-
-	script := "#!/bin/sh\nshift\nexec go test \"$@\"\n"
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "gotestsum"), []byte(script), 0750))
-	return dir
-}
-
-func symlinkTool(t *testing.T, dir, name string) {
-	t.Helper()
-	real, err := exec.LookPath(name)
-	assert.NilError(t, err)
-	assert.NilError(t, os.Symlink(real, filepath.Join(dir, name)))
 }

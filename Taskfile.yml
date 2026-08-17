@@ -17,9 +17,20 @@ tasks:
       - go tool golangci-lint run ./...
 
   test:
-    desc: Run unit and acceptance tests (hermetic, no network)
+    desc: Run unit and acceptance tests
     cmds:
-      - go tool gotestsum -- ./...
+      - task: test:unit
+      - task: test:acceptance
+
+  test:unit:
+    desc: Run unit tests (hermetic, no network)
+    cmds:
+      - go tool gotestsum -- $(go list ./... | grep -v /acceptance)
+
+  test:acceptance:
+    desc: Run acceptance tests. Cache-backed cases run against a real CircleCI task agent when available, falling back to a fake locally.
+    cmds:
+      - go tool gotestsum -- ./acceptance/...
 
   tidy:
     desc: Tidy go.mod / go.sum

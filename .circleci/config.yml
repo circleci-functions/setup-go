@@ -3,22 +3,10 @@ version: 2.1
 orbs:
   toolkit: https://raw.githubusercontent.com/circleci-functions/toolkit/refs/heads/main/orbs/toolkit.yml
 
-parameters:
-  go-version:
-    type: string
-    default: "1.26.4"
-    description: >-
-      Go version for the smoke test to install.
-
 executors:
   go:
     docker:
       - image: cimg/go:1.26
-  # The smoke test execs the binary `build` just cross-compiled, so it runs
-  # on a bare base image rather than a language-preinstalled one.
-  base:
-    docker:
-      - image: cimg/base:stable
 
 jobs:
   test:
@@ -31,84 +19,31 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task lint
-      - run: task test
+      - run: task test:unit
       - save_cache:
           key: setup-go-go-{{ checksum "go.sum" }}-{{ epoch }}
           paths:
             - ~/.cache/go-build
             - ~/go/pkg/mod
 
-  # Cross-compiles setup-go into ./dist and persists it to the workspace, so
-  # smoke-test exercises exactly what `publish` is about to ship.
-  build:
+  # Runs against the real task agent, since this executor is a real CircleCI
+  # execution environment: setup-go's cache calls reach the real
+  # $TMPDIR/circleci-plugin.sock, just like they would for any caller. A
+  # dedicated job namespaces every acceptance cache entry away from anything
+  # else (CIRCLE_JOB is a cache-key component), and keeps a `-race` build and
+  # a real toolchain download from delaying lint/unit feedback.
+  acceptance:
     executor: go
     steps:
       - checkout
       - toolkit/private-mod-init
+      # Restore only: the `test` job owns this key, and a second saver would
+      # race for an immutable key.
       - restore_cache:
           keys:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
-      - run: task dry-run
-      - persist_to_workspace:
-          root: .
-          paths:
-            - dist
-
-  smoke-test:
-    executor: base
-    steps:
-      - checkout
-      - attach_workspace:
-          at: .
-      - run:
-          name: Install Go
-          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}'
-      - run: go version
-      - run:
-          name: Remove install
-          command: rm -rf ~/.cache/setup-go
-      - run:
-          name: Install Go (expect cache hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}' 2>&1 | tee /tmp/setup-go-second-run.log
-            grep -q "restored from cache" /tmp/setup-go-second-run.log
-      - run:
-          name: Test command
-          command: ./dist/setup-go/linux/amd64/setup-go test --project-path ./acceptance/test-project/
-      - toolkit/private-mod-init
-      - restore_cache:
-          keys:
-            - setup-go-go-{{ checksum "go.sum" }}-
-            - setup-go-go-
-      - run:
-          name: Load lint cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
-      - run:
-          name: Run golangci-lint
-          command: go tool golangci-lint run ./...
-      - run:
-          name: Save lint cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache save --golangci-lint --checksum '{{ checksum "go.sum" }}'
-      - run:
-          name: Remove lint cache
-          command: rm -rf ~/.cache/golangci-lint
-      - run:
-          name: Load lint cache (expect hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
-            test -n "$(ls -A ~/.cache/golangci-lint)"
-      - run:
-          name: Save build cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache save --build --checksum '{{ checksum "go.sum" }}'
-      - run:
-          name: Remove build cache
-          command: rm -rf "$(go env GOCACHE)"
-      - run:
-          name: Load build cache (expect hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go cache load --build --checksum '{{ checksum "go.sum" }}'
-            test -n "$(ls -A "$(go env GOCACHE)")"
+      - run: task test:acceptance
 
   publish:
     executor: go
@@ -138,19 +73,13 @@ workflows:
           filters:
             tags:
               only: /.*/
-      - build:
-          context: [github-readonly]
-          filters:
-            tags:
-              only: /.*/
-      - smoke-test:
-          requires: [build]
+      - acceptance:
           context: [github-readonly]
           filters:
             tags:
               only: /.*/
       - publish:
-          requires: [test, smoke-test]
+          requires: [test, acceptance]
           context: [functions-publisher, github-readonly]
           filters:
             tags:
