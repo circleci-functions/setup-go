@@ -17,9 +17,14 @@ tasks:
       - go tool golangci-lint run ./...
 
   test:
-    desc: Run unit and acceptance tests (hermetic, no network)
+    desc: Run unit tests (hermetic, no network)
     cmds:
       - go tool gotestsum -- ./...
+
+  acceptance:
+    desc: Run acceptance tests against real infra (network + CircleCI task-agent required; not part of task test/ci)
+    cmds:
+      - go test -tags acceptance -v ./acceptance/...
 
   tidy:
     desc: Tidy go.mod / go.sum

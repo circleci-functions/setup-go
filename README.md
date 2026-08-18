@@ -224,11 +224,17 @@ Unit tests live under `{goversion,install,jobenv,cache,goenv}/` and call the
 exported API directly — `install`/`goversion`/`jobenv` via a fake go.dev server
 (`internal/testing/fakegodev`), `cache` via a fake CircleCI plugin server
 (`github.com/circleci-functions/toolkit/sdk/sdktest`), `goenv` against the real
-`go` binary (no network involved). No network access required.
+`go` binary (no network involved). No network access required. Run with
+`task test`.
 
-Acceptance tests live under `acceptance/` and compile the real `setup-go`
-binary in `TestMain`, then run it as a subprocess to verify the CLI contract
-(`--help`, `install --detect-only` writing `$BASH_ENV`, `test` flag
-passthrough, `cache` round-trips, unknown-flag exit code). They also use
-`fakegodev`/`sdktest` so no network is required. Both suites run together
-under `task test`.
+Acceptance tests live under `acceptance/`, behind a `//go:build acceptance`
+tag so they're excluded from `task test`/`task ci`. They compile the real
+`setup-go` binary (via the toolkit's `testing/compiler` package, or reuse an
+already-built binary passed via `SETUP_GO_ACCEPTANCE_BINARY`) and run it as a
+subprocess against real infrastructure — a real go.dev download and a real
+CircleCI task-agent, no stubbing — to verify the same sequence the CI
+`acceptance` job runs: installing Go (cold and cache-hit), running the `test`
+subcommand against a fixture project, and round-tripping the golangci-lint
+and build caches. Run with `task acceptance`; this requires network access
+and, for the cache-related steps, a real CircleCI task-agent, so it's only
+expected to fully pass inside an actual CircleCI job.

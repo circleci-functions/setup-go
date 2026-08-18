@@ -1,3 +1,5 @@
+//go:build acceptance
+
 package setupgo_test
 
 import (
@@ -21,7 +23,18 @@ func TestMain(m *testing.M) {
 	os.Exit(status)
 }
 
+// runTests resolves the setup-go binary under test, then runs the suite. In
+// CI, SETUP_GO_ACCEPTANCE_BINARY points at the already cross-compiled release
+// artifact the `build` job produced (the same one `publish` is about to
+// ship), since these tests run on a bare executor with no `go` on PATH for
+// the toolkit compiler to invoke. With no env var set, it falls back to
+// compiling a fresh copy via the toolkit compiler, for local/dev runs.
 func runTests(m *testing.M) (int, error) {
+	if bin := os.Getenv("SETUP_GO_ACCEPTANCE_BINARY"); bin != "" {
+		binaryPath = bin
+		return m.Run(), nil
+	}
+
 	ctx := context.Background()
 
 	p := compiler.NewParallel(1)
