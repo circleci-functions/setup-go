@@ -50,7 +50,7 @@ func runTests(m *testing.M) (int, error) {
 // job and to the fake otherwise, plus a run function bound to its env.
 func sandbox(t *testing.T) (*sdktest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
 	t.Helper()
-	s := sdktest.NewSandbox(t, sdktest.WithRealAgent())
+	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
 	return s, func(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 		t.Helper()
 		r := runner.New(t, binaryPath, runner.WithSandboxEnv(s.EnvWith(extraEnv)))

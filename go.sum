@@ -198,6 +198,8 @@ github.com/circleci-functions/toolkit v0.1.4-0.20260819175847-35282896b74e h1:KB
 github.com/circleci-functions/toolkit v0.1.4-0.20260819175847-35282896b74e/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
 github.com/circleci-functions/toolkit v0.1.4-0.20260819182628-281e0776eaee h1:NOqHLSESIpz98gARrf7UsEyneOTS20O7blC27OsF//0=
 github.com/circleci-functions/toolkit v0.1.4-0.20260819182628-281e0776eaee/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819184031-223eaa617e5f h1:fm3zZzqjqyXRYcuddeJqc5Qk8rA2Ceze2GazMzundPs=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819184031-223eaa617e5f/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
 github.com/ckaznocha/intrange v0.3.1 h1:j1onQyXvHUsPWujDH6WIjhyH26gkRt/txNlV7LspvJs=
 github.com/ckaznocha/intrange v0.3.1/go.mod h1:QVepyz1AkUoFQkpEqksSYpNpUo3c5W7nWh/s6SHIJJk=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
