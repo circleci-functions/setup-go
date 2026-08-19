@@ -14,8 +14,7 @@ executors:
   go:
     docker:
       - image: cimg/go:1.26
-  # The acceptance job execs binaries `build` already compiled, so it runs
-  # on a bare base image rather than a language-preinstalled one.
+  # bare-smoke execs the binary `build` cross-compiled, on an image with no Go.
   base:
     docker:
       - image: cimg/base:stable
@@ -39,7 +38,7 @@ jobs:
             - ~/go/pkg/mod
 
   # Cross-compiles setup-go into ./dist and persists it to the workspace, so
-  # acceptance exercises exactly what `publish` is about to ship.
+  # bare-smoke exercises exactly what `publish` is about to ship.
   build:
     executor: go
     steps:
@@ -50,32 +49,41 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task dry-run
-      - run:
-          name: Compile acceptance tests
-          command: go test -c -tags acceptance -o dist/acceptance/acceptance.test ./acceptance
       - persist_to_workspace:
           root: .
           paths:
             - dist
 
-  # Runs on a bare base image (no Go preinstalled) so the acceptance suite
-  # genuinely proves `setup-go install` bootstraps a Go toolchain from
-  # nothing. Both binaries it execs (setup-go itself and the acceptance test
-  # binary) are precompiled by `build`, since compiling either would require
-  # a `go` this executor doesn't have.
+  # Real go.dev downloads and a real task-agent. Runs on the go executor: the
+  # suite installs into temp dirs and asserts the toolchain it put on PATH is
+  # the one it installed, so a preinstalled Go can't produce a false pass.
   acceptance:
+    executor: go
+    steps:
+      - checkout
+      - toolkit/private-mod-init
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - run:
+          name: Run acceptance tests
+          command: task acceptance
+          environment:
+            SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
+
+  # The one property that needs an image without Go: the shipped artifact
+  # bootstraps a toolchain from nothing and leaves it on PATH for later steps.
+  bare-smoke:
     executor: base
     steps:
       - checkout
       - attach_workspace:
           at: .
       - run:
-          name: Run acceptance tests
-          command: |
-            export SETUP_GO_ACCEPTANCE_BINARY="$(pwd)/dist/setup-go/linux/amd64/setup-go"
-            export SETUP_GO_ACCEPTANCE_VERSION="<< pipeline.parameters.go-version >>"
-            cd acceptance
-            "../dist/acceptance/acceptance.test" -test.v -test.timeout=20m
+          name: Install Go from nothing
+          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >>
+      - run: go version
 
   publish:
     executor: go
@@ -111,13 +119,17 @@ workflows:
             tags:
               only: /.*/
       - acceptance:
-          requires: [build]
           context: [github-readonly]
           filters:
             tags:
               only: /.*/
+      - bare-smoke:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
       - publish:
-          requires: [test, acceptance]
+          requires: [test, acceptance, bare-smoke]
           context: [functions-publisher, github-readonly]
           filters:
             tags:

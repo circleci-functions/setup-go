@@ -192,6 +192,10 @@ github.com/chzyer/readline v0.0.0-20180603132655-2972be24d48e/go.mod h1:nSuG5e5P
 github.com/chzyer/test v0.0.0-20180213035817-a1ea475d72b1/go.mod h1:Q3SI9o4m/ZMnBNeIyt5eFwwo7qiLfzFZmjNmxjkiQlU=
 github.com/circleci-functions/toolkit v0.1.2 h1:qn3L7T1In5UdxzRONhBu64vcxCp3ci54qpM5LIjFU+Y=
 github.com/circleci-functions/toolkit v0.1.2/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819174919-e5df9442b134 h1:qWARpC6h8qaK8MEHj7j/vbvMgiE40QiIbmeYlvble5I=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819174919-e5df9442b134/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819175847-35282896b74e h1:KBwzLOO8XcZH7c5m/Z5nuurQ685jxakMjMWyaSAK5HU=
+github.com/circleci-functions/toolkit v0.1.4-0.20260819175847-35282896b74e/go.mod h1:7UwuoqLkPSvKIKkqU7SBR/2ql0I88vdJFYgyFlAN4TA=
 github.com/ckaznocha/intrange v0.3.1 h1:j1onQyXvHUsPWujDH6WIjhyH26gkRt/txNlV7LspvJs=
 github.com/ckaznocha/intrange v0.3.1/go.mod h1:QVepyz1AkUoFQkpEqksSYpNpUo3c5W7nWh/s6SHIJJk=
 github.com/client9/misspell v0.3.4/go.mod h1:qj6jICC3Q7zFZvVWo7KLAzC3yx5G7kyvSDkc90ppPyw=
