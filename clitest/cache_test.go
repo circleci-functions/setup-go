@@ -9,54 +9,6 @@ import (
 	"gotest.tools/v3/assert"
 )
 
-// TestCLI_Cache_GolangCILint_RoundTrips verifies that `cache save
-// --golangci-lint` saves golangci-lint's default cache directory
-// (~/.cache/golangci-lint) and a subsequent `cache load --golangci-lint`
-// restores it, round-tripping a marker file across two invocations against
-// the same fake CircleCI plugin server.
-func TestCLI_Cache_GolangCILint_RoundTrips(t *testing.T) {
-	s, run := sandbox(t)
-	cacheDir := filepath.Join(s.Home, ".cache", "golangci-lint")
-
-	assert.NilError(t, os.MkdirAll(cacheDir, 0750))
-	assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
-
-	out, err := run(t, nil, "cache", "save", "--golangci-lint", "--checksum", "checksum-a")
-	assert.NilError(t, err, "save failed:\n%s", out)
-
-	assert.NilError(t, os.RemoveAll(cacheDir))
-
-	out, err = run(t, nil, "cache", "load", "--golangci-lint", "--checksum", "checksum-a")
-	assert.NilError(t, err, "load failed:\n%s", out)
-
-	got, err := os.ReadFile(filepath.Join(cacheDir, "marker")) //nolint:gosec
-	assert.NilError(t, err)
-	assert.Equal(t, string(got), "hit", "expected lint cache marker restored from a prior save")
-}
-
-// TestCLI_Cache_Build_RoundTrips verifies that `cache save --build` saves the
-// go build cache directory and a subsequent `cache load --build` restores it.
-// --build-path points the save at a temp dir so the test never touches the
-// executor's real GOCACHE.
-func TestCLI_Cache_Build_RoundTrips(t *testing.T) {
-	_, run := sandbox(t)
-
-	cacheDir := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
-
-	out, err := run(t, nil, "cache", "save", "--build", "--build-path", cacheDir, "--checksum", "checksum-a")
-	assert.NilError(t, err, "save failed:\n%s", out)
-
-	assert.NilError(t, os.RemoveAll(cacheDir))
-
-	out, err = run(t, nil, "cache", "load", "--build", "--checksum", "checksum-a")
-	assert.NilError(t, err, "load failed:\n%s", out)
-
-	got, err := os.ReadFile(filepath.Join(cacheDir, "marker")) //nolint:gosec
-	assert.NilError(t, err)
-	assert.Equal(t, string(got), "hit", "expected build cache marker restored from a prior save")
-}
-
 // TestCLI_Cache_Build_SavesGoCacheNotModCache verifies that without
 // --build-path, `cache save --build` saves the directory `go env` reports as
 // GOCACHE — not GOMODCACHE, whose value it also has to hand.

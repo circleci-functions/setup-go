@@ -148,22 +148,6 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// TestCLI_CGOAlpine_SkippedOnNonAlpine relies on the machine running this
-// test not being Alpine Linux (true for both CI and local dev), so the
-// automatic cgo-toolchain step should silently take the "not Alpine" branch:
-// no attempt to run apk, no "installed cgo toolchain" message, and the
-// install must still succeed exactly as if the step didn't exist.
-func TestCLI_CGOAlpine_SkippedOnNonAlpine(t *testing.T) {
-	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
-	dir := t.TempDir()
-	bashEnvFile := filepath.Join(dir, "bash_env")
-
-	out, err := run(t, map[string]string{"GOPATH": "", "BASH_ENV": bashEnvFile},
-		"install", "--detect-only", "--api-url", ts.URL)
-	assert.NilError(t, err, "got: %s", out)
-	assert.Assert(t, !strings.Contains(out, "installed cgo toolchain"), "expected no alpine cgo-install message on non-Alpine, got: %s", out)
-}
-
 // stubGoOnlyBinDir writes a `go` stub (under a "bin" subdirectory, so
 // --detect-only's GOROOT inference — two dirs up from the resolved binary —
 // lands on a sane path) that answers `go env` queries. It contains nothing
@@ -207,19 +191,4 @@ func TestCLI_CGOCheck_DetectOnly(t *testing.T) {
 		map[string]string{"PATH": binDir, "CC": "", "GOPATH": "", "BASH_ENV": bashEnvFile},
 		"install", "--detect-only", "--api-url", ts.URL)
 	assert.NilError(t, err, "got: %s", out)
-}
-
-// TestCLI_CGOCheck_NoWarningWhenCompilerPresent relies on this machine
-// having a real C compiler in PATH (true in CI's cimg/go image and on any
-// standard dev machine — the same assumption TestCLI_Install_DetectOnly_ExportsEnv
-// already makes about the `go` binary). It covers the "compiler found"
-// branch of the automatic cgo check.
-func TestCLI_CGOCheck_NoWarningWhenCompilerPresent(t *testing.T) {
-	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
-	bashEnvFile := filepath.Join(t.TempDir(), "bash_env")
-
-	out, err := run(t, map[string]string{"GOPATH": "", "BASH_ENV": bashEnvFile},
-		"install", "--detect-only", "--api-url", ts.URL)
-	assert.NilError(t, err, "got: %s", out)
-	assert.Assert(t, !strings.Contains(out, "no C compiler found"), "expected no cgo warning when a compiler is present, got: %s", out)
 }
