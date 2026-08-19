@@ -1,6 +1,6 @@
 // Package clitest_test exercises the setup-go CLI contract end to end against
 // fakes: a fake go.dev (internal/testing/fakegodev) and a fake CircleCI plugin
-// server (functest's sandbox). Hermetic and no network, so it runs under
+// server (sdktest's sandbox). Hermetic and no network, so it runs under
 // `task test` on every commit. Real go.dev and a real task-agent are covered
 // by acceptance/.
 package clitest_test
@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
 	"github.com/circleci-functions/toolkit/testing/compiler"
-	"github.com/circleci-functions/toolkit/testing/functest"
 	"github.com/circleci-functions/toolkit/testing/runner"
 )
 
@@ -49,16 +49,16 @@ func runTests(m *testing.M) (int, error) {
 // environment, so entries in extraEnv take precedence.
 func run(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 	t.Helper()
-	r := runner.New(t, binaryPath, runner.WithUnsafeOSEnvVars(), runner.WithUnsafeAdditionalEnvVars(extraEnv))
+	r := runner.New(t, binaryPath, runner.WithSandboxEnv(extraEnv))
 	_, err := r.Run(args...)
 	return r.StdoutString() + r.StderrString(), err
 }
 
-// sandbox returns a functest sandbox plus a run function bound to its env, so a
+// sandbox returns a sandbox plus a run function bound to its env, so a
 // test can't accidentally install into the developer's real home directory.
-func sandbox(t *testing.T) (*functest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
+func sandbox(t *testing.T) (*sdktest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
 	t.Helper()
-	s := functest.New(t)
+	s := sdktest.NewSandbox(t)
 	return s, func(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 		t.Helper()
 		return run(t, s.EnvWith(extraEnv), args...)

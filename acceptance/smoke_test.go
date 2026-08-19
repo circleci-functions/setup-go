@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
+
+	"github.com/circleci-functions/toolkit/bashenv"
 )
 
 // acceptanceVersion returns the Go version to install: SETUP_GO_ACCEPTANCE_VERSION
@@ -45,7 +47,7 @@ func TestAcceptance_Smoke(t *testing.T) {
 		assert.Assert(t, !strings.Contains(out, "restored from cache"),
 			"a per-run checksum must miss the cache, so this step downloads for real; got: %s", out)
 
-		goBinDir = installedGoBinDir(t, s.Path(t), s.InstallDir)
+		goBinDir = installedGoBinDir(t, s.BashEnv, s.InstallDir)
 		assertGoVersion(t, goBinDir, version)
 	}) {
 		t.Fatal("cold install failed; aborting remaining steps")
@@ -59,7 +61,7 @@ func TestAcceptance_Smoke(t *testing.T) {
 		out, err := run(t, nil, installArgs...)
 		assert.NilError(t, err, "got: %s", out)
 		assert.Assert(t, strings.Contains(out, "restored from cache"), "expected a cache hit, got: %s", out)
-		assertGoVersion(t, installedGoBinDir(t, s.Path(t), s.InstallDir), version)
+		assertGoVersion(t, installedGoBinDir(t, s.BashEnv, s.InstallDir), version)
 	}) {
 		t.Fatal("cache-hit install failed; aborting remaining steps")
 	}
@@ -106,9 +108,12 @@ func TestAcceptance_Smoke(t *testing.T) {
 
 // installedGoBinDir returns the bin directory setup-go prepended to PATH,
 // asserting it points inside the sandbox rather than at a preinstalled Go.
-func installedGoBinDir(t *testing.T, bashEnvPath, installDir string) string {
+func installedGoBinDir(t *testing.T, bashEnvFile, installDir string) string {
 	t.Helper()
-	first, _, _ := strings.Cut(bashEnvPath, string(os.PathListSeparator))
+	path, err := bashenv.Path(bashEnvFile)
+	assert.NilError(t, err)
+
+	first, _, _ := strings.Cut(path, string(os.PathListSeparator))
 	assert.Assert(t, strings.HasPrefix(first, installDir),
 		"expected $BASH_ENV to prepend a bin dir under %s, got %q", installDir, first)
 	return first

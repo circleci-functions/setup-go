@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
 	"github.com/circleci-functions/toolkit/testing/compiler"
-	"github.com/circleci-functions/toolkit/testing/functest"
 	"github.com/circleci-functions/toolkit/testing/runner"
 )
 
@@ -48,14 +48,12 @@ func runTests(m *testing.M) (int, error) {
 
 // sandbox returns a sandbox wired to the real task-agent when inside a CircleCI
 // job and to the fake otherwise, plus a run function bound to its env.
-func sandbox(t *testing.T) (*functest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
+func sandbox(t *testing.T) (*sdktest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
 	t.Helper()
-	s := functest.New(t, functest.WithRealAgent())
+	s := sdktest.NewSandbox(t, sdktest.WithRealAgent())
 	return s, func(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 		t.Helper()
-		r := runner.New(t, binaryPath,
-			runner.WithUnsafeOSEnvVars(),
-			runner.WithUnsafeAdditionalEnvVars(s.EnvWith(extraEnv)))
+		r := runner.New(t, binaryPath, runner.WithSandboxEnv(s.EnvWith(extraEnv)))
 		_, err := r.Run(args...)
 		return r.StdoutString() + r.StderrString(), err
 	}
