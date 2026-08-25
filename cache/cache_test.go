@@ -164,3 +164,28 @@ func TestGoModCache_CacheErrorIsNonFatal(t *testing.T) {
 	cache.RestoreGoModCache(ctx, client, "", "checksum-a")
 	cache.SaveGoModCache(ctx, client, "", "checksum-a", t.TempDir())
 }
+
+// TestSaveBuildCache_AtTeardown verifies that saving through
+// Client.AtTeardown registers the save rather than running it, and that the
+// registered save still round-trips once the job ends.
+func TestSaveBuildCache_AtTeardown(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	client := srv.Client()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("hit"), 0600))
+
+	cache.SaveBuildCache(ctx, client.AtTeardown(), "", "checksum-a", dir)
+
+	// Registered, not saved: nothing is stored until the job ends.
+	assert.Equal(t, len(srv.PendingCacheSaves()), 1)
+
+	srv.EndJob(t)
+	assert.NilError(t, os.RemoveAll(dir))
+
+	cache.RestoreBuildCache(ctx, client, "", "checksum-a")
+	got, err := os.ReadFile(filepath.Join(dir, "marker")) //nolint:gosec
+	assert.NilError(t, err)
+	assert.Equal(t, string(got), "hit")
+}

@@ -189,6 +189,11 @@ func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 				assert.NilError(t, err, "first run failed: %s", out)
 			}
 
+			// The save is registered to run at the end of the job, so it has
+			// not happened yet when the command exits.
+			assert.Equal(t, len(srv.PendingCacheSaves()), 1)
+			srv.EndJob(t)
+
 			assert.NilError(t, os.RemoveAll(cacheDir))
 
 			out, _ = run(t, nil, args...)

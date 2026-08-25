@@ -15,6 +15,13 @@ import (
 // {{ epoch | round "72h" }} cache key component.
 const cacheRotation = 72 * time.Hour
 
+// Saver saves paths under a cache key. Both *sdk.Client and the *sdk.Teardown
+// returned by Client.AtTeardown satisfy it, so a caller chooses whether the
+// save runs immediately or at the end of the job.
+type Saver interface {
+	SaveCache(ctx context.Context, key string, paths []string) error
+}
+
 // LintCacheDir returns golangci-lint's cache directory. It currently always
 // returns the tool's own default, ~/.cache/golangci-lint.
 func LintCacheDir() (string, error) {
@@ -36,7 +43,7 @@ func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum str
 
 // SaveLintCache saves golangci-lint's cache directory to the CircleCI job
 // cache.
-func SaveLintCache(ctx context.Context, client *sdk.Client, key, checksum string) {
+func SaveLintCache(ctx context.Context, saver Saver, key, checksum string) {
 	// TODO: need to be able to set the cache dir other than the default.
 	dir, err := LintCacheDir()
 	if err != nil {
@@ -44,7 +51,7 @@ func SaveLintCache(ctx context.Context, client *sdk.Client, key, checksum string
 		return
 	}
 
-	sdk.LogCacheErr("save lint", client.SaveCache(ctx, lintCacheKey(key, checksum), []string{dir}))
+	sdk.LogCacheErr("save lint", saver.SaveCache(ctx, lintCacheKey(key, checksum), []string{dir}))
 }
 
 // lintCacheKey mirrors the circleci/go orb's cache key:
@@ -80,8 +87,8 @@ func RestoreGoModCache(ctx context.Context, client *sdk.Client, key, checksum st
 	sdk.LogCacheErr("restore go mod", err)
 }
 
-func SaveGoModCache(ctx context.Context, client *sdk.Client, key, checksum, dir string) {
-	err := client.SaveCache(ctx, goModCacheKey(key, checksum), []string{dir})
+func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string) {
+	err := saver.SaveCache(ctx, goModCacheKey(key, checksum), []string{dir})
 	sdk.LogCacheErr("save go mod", err)
 }
 
@@ -100,8 +107,8 @@ func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum st
 	sdk.LogCacheErr("restore go build", err)
 }
 
-func SaveBuildCache(ctx context.Context, client *sdk.Client, key, checksum, dir string) {
-	err := client.SaveCache(ctx, buildCacheKey(key, checksum), []string{dir})
+func SaveBuildCache(ctx context.Context, saver Saver, key, checksum, dir string) {
+	err := saver.SaveCache(ctx, buildCacheKey(key, checksum), []string{dir})
 	sdk.LogCacheErr("save go build", err)
 }
 

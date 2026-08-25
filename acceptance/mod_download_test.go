@@ -57,6 +57,11 @@ func TestCLI_ModDownload_CacheRoundTrip(t *testing.T) {
 	out, err := run(t, env, "mod-download", "--checksum", "checksum-a")
 	assert.NilError(t, err, "first run failed: %s", out)
 
+	// The save is registered to run at the end of the job, so it has not
+	// happened yet when the command exits.
+	assert.Equal(t, len(srv.PendingCacheSaves()), 1)
+	srv.EndJob(t)
+
 	assert.NilError(t, os.RemoveAll(modCacheDir))
 
 	out, err = run(t, env, "mod-download", "--checksum", "checksum-a")
