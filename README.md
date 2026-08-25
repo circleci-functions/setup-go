@@ -96,9 +96,11 @@ steps:
 
 The save is registered before the tests run and happens at the end of the job,
 so the cache survives a run that fails, is cancelled or times out — the
-packages it did compile are still worth keeping for a re-run. It uses the same key as
-`cache save --build` (below), so a `test` run and a separate `cache load
---build` step share entries when `--cache-key`/`--checksum` match.
+packages it did compile are still worth keeping for a re-run. It uses the same
+key as `cache save --build` (below), so a later job's `cache load --build` step
+picks up what a `test` run saved when `--cache-key`/`--checksum` match. A `cache
+load --build` in the same job as the `test` run will not see it, since the save
+has not happened yet.
 
 ## cache
 
