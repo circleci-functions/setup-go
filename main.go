@@ -137,14 +137,16 @@ func (t *testCmd) Run(ctx context.Context, client *sdk.Client) error {
 
 	// Resolved up front so a bad --cache-path or an unusable `go env` fails
 	// before the tests run rather than after.
-	buildCache := ""
 	if t.Cache {
 		dir, err := buildCacheDir(t.CachePath, "--cache-path", nil)
 		if err != nil {
 			return err
 		}
-		buildCache = dir
 		cache.RestoreBuildCache(ctx, client, t.CacheKey, t.Checksum)
+		// Registered before the run so the cache survives a run that is
+		// cancelled or times out, not only one that fails. Either way the
+		// packages it did compile are worth keeping for a re-run.
+		cache.SaveBuildCache(ctx, client.AtTeardown(), t.CacheKey, t.Checksum, dir)
 	}
 
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -152,12 +154,6 @@ func (t *testCmd) Run(ctx context.Context, client *sdk.Client) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	testErr := cmd.Run()
-
-	// Saved even when the tests fail: a failed run still compiled packages a
-	// re-run can reuse.
-	if t.Cache {
-		cache.SaveBuildCache(ctx, client, t.CacheKey, t.Checksum, buildCache)
-	}
 
 	if testErr != nil {
 		return fmt.Errorf("go test: %w", testErr)
@@ -273,6 +269,23 @@ func buildCacheDir(override *string, flag string, env *goenv.GoEnv) (string, err
 	return env.GOCACHE, nil
 }
 
+// goModCacheDir resolves the go module cache directory, preferring an explicit
+// override over `go env`.
+func goModCacheDir(override *string) (string, error) {
+	if override != nil {
+		if *override == "" {
+			return "", fmt.Errorf("must pass a non-empty directory with --path")
+		}
+		return *override, nil
+	}
+
+	env, err := goenv.Load()
+	if err != nil {
+		return "", err
+	}
+	return env.GOMODCACHE, nil
+}
+
 type modDownloadCmd struct {
 	Cache    bool    `help:"Set to false to skip restoring and saving the go mod cache." default:"true"`
 	CacheKey string  `help:"Optional cache key component to partition cache entries. If not set, defaults to the empty string."`
@@ -281,8 +294,17 @@ type modDownloadCmd struct {
 }
 
 func (md *modDownloadCmd) Run(ctx context.Context, client *sdk.Client) error {
+	// Resolved up front so a bad --path fails before the download rather than
+	// after, and so the save can be registered before it too.
 	if md.Cache {
+		dir, err := goModCacheDir(md.Path)
+		if err != nil {
+			return err
+		}
 		cache.RestoreGoModCache(ctx, client, md.CacheKey, md.Checksum)
+		// Registered before the download so a cancelled one still caches
+		// whatever it managed to fetch.
+		cache.SaveGoModCache(ctx, client.AtTeardown(), md.CacheKey, md.Checksum, dir)
 	}
 
 	cmd := exec.CommandContext(ctx, "go", "mod", "download")
@@ -290,23 +312,6 @@ func (md *modDownloadCmd) Run(ctx context.Context, client *sdk.Client) error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("go mod download: %w", err)
-	}
-
-	if md.Cache {
-		goModCacheDir := ""
-		if md.Path != nil {
-			if *md.Path == "" {
-				return fmt.Errorf("must pass a non-empty directory with --path")
-			}
-			goModCacheDir = *md.Path
-		} else {
-			goEnv, err := goenv.Load()
-			if err != nil {
-				return err
-			}
-			goModCacheDir = goEnv.GOMODCACHE
-		}
-		cache.SaveGoModCache(ctx, client, md.CacheKey, md.Checksum, goModCacheDir)
 	}
 
 	return nil

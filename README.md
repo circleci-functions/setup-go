@@ -89,13 +89,14 @@ steps:
 | `--failfast` | false | Stop after the first test failure |
 | `--count` | (go default) | Run each test, benchmark, and fuzz seed N times. `1` disables test caching. |
 | `--use-gotestsum` | false | Run via `gotestsum` instead of `go test`. Requires `gotestsum` on `PATH`. |
-| `--cache` | true | Restore the go build cache before the run and save it after. Set to `false` to skip. |
+| `--cache` | true | Restore the go build cache before the run, and save it at the end of the job. Set to `false` to skip. |
 | `--cache-key` | (empty) | Optional cache key component to partition cache entries. |
 | `--checksum` | (empty) | Optional checksum to partition the cache entry. |
 | `--cache-path` | (empty) | Override the go build cache directory (`GOCACHE`) to save/restore, instead of detecting it via `go env`. Must not be set to an empty string. |
 
-The build cache is saved even when tests fail, since a failed run still
-compiled packages a re-run can reuse. It uses the same key as
+The save is registered before the tests run and happens at the end of the job,
+so the cache survives a run that fails, is cancelled or times out — the
+packages it did compile are still worth keeping for a re-run. It uses the same key as
 `cache save --build` (below), so a `test` run and a separate `cache load
 --build` step share entries when `--cache-key`/`--checksum` match.
 
@@ -179,9 +180,9 @@ entries that no longer apply are simply never read.
 
 ### What it does
 
-Runs `go mod download` in the current directory, restoring/saving the go
-module cache (`GOMODCACHE`) around it so downloaded modules persist across
-job executors.
+Runs `go mod download` in the current directory, restoring the go module cache
+(`GOMODCACHE`) before it and saving it at the end of the job, so downloaded
+modules persist across job executors.
 
 1. Unless `--cache=false`, restores the go module cache from the CircleCI job
    cache.
@@ -203,7 +204,7 @@ steps:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--cache` | true | Set to `false` to skip restoring/saving the go module cache. |
+| `--cache` | true | Restore the go module cache before the download, and save it at the end of the job. Set to `false` to skip. |
 | `--cache-key` | (empty) | Optional cache key component to partition cache entries. |
 | `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
 | `--path` | (empty) | Override the go module cache directory (`GOMODCACHE`) to save/restore, instead of detecting it via `go env`. Must not be set to an empty string. |
