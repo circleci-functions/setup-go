@@ -59,6 +59,7 @@ esac
 // (the only cache target implemented so far) is an error rather than a
 // silent no-op.
 func TestCLI_Cache_NoTarget_ReturnsError(t *testing.T) {
+	_, run := sandbox(t)
 	_, err := run(t, nil, "cache", "load")
 	assert.ErrorContains(t, err, "exit status 1")
 }

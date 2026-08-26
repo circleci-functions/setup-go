@@ -8,6 +8,7 @@ package clitest_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,24 +46,37 @@ func runTests(m *testing.M) (int, error) {
 	return m.Run(), nil
 }
 
-// run runs the compiled binary with extraEnv merged on top of the inherited
-// environment, so entries in extraEnv take precedence.
-func run(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
-	t.Helper()
-	r := runner.New(t, binaryPath, runner.WithSandboxEnv(extraEnv))
-	_, err := r.Run(args...)
-	return r.StdoutString() + r.StderrString(), err
-}
+// runFunc runs the compiled binary with extraEnv applied on top of the
+// sandbox's environment, so entries in extraEnv take precedence.
+type runFunc func(t *testing.T, extraEnv map[string]string, args ...string) (string, error)
 
-// sandbox returns a sandbox plus a run function bound to its env, so a
-// test can't accidentally install into the developer's real home directory.
-func sandbox(t *testing.T) (*sdktest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
+// sandbox returns a sandbox plus a run function bound to its env. It is the only
+// way to run the binary in this package, so no test can install into the
+// developer's real home directory or reach a cache it did not set up.
+func sandbox(t *testing.T) (*sdktest.Sandbox, runFunc) {
 	t.Helper()
+
 	s := sdktest.NewSandbox(t)
 	return s, func(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 		t.Helper()
-		return run(t, s.EnvWith(extraEnv), args...)
+		r := runner.New(t, binaryPath, runner.WithSandboxEnv(sandboxEnv(s, extraEnv)))
+		_, err := r.Run(args...)
+		return r.StdoutString() + r.StderrString(), err
 	}
+}
+
+// sandboxEnv returns the sandbox's environment with extra applied on top.
+//
+// GOROOT is cleared: `go test` sets it for this test process, and a Go
+// toolchain honours it over its own location — so leaving it set makes a
+// toolchain setup-go installs run with the test runner's tools. This is
+// setup-go's concern rather than the sandbox's, since only a function that
+// installs a Go toolchain has it.
+func sandboxEnv(s *sdktest.Sandbox, extra map[string]string) map[string]string {
+	env := s.Env()
+	env["GOROOT"] = ""
+	maps.Copy(env, extra)
+	return env
 }
 
 // fixtureDir resolves the checked-in test project to an absolute path. The

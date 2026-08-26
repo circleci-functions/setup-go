@@ -29,7 +29,7 @@ func acceptanceVersion() string {
 // a step fails.
 func TestAcceptance_Smoke(t *testing.T) {
 	s, run := sandbox(t)
-	checksum := s.CacheChecksum()
+	checksum := s.CacheKeyNonce
 	version := acceptanceVersion()
 
 	installArgs := []string{
@@ -65,6 +65,10 @@ func TestAcceptance_Smoke(t *testing.T) {
 	}) {
 		t.Fatal("cache-hit install failed; aborting remaining steps")
 	}
+
+	t.Run("BashEnv_SourcesIntoALaterStep", func(t *testing.T) {
+		assertBashEnvPutsGoOnPath(t, s.BashEnv, goBinDir)
+	})
 
 	// The installed toolchain, not whatever `go` the executor came with.
 	goPath := map[string]string{"PATH": goBinDir + string(os.PathListSeparator) + os.Getenv("PATH")}
@@ -134,4 +138,26 @@ func assertMarker(t *testing.T, dir, want string) {
 	got, err := os.ReadFile(filepath.Join(dir, "marker")) //nolint:gosec
 	assert.NilError(t, err, "expected the cache to restore %s", dir)
 	assert.Equal(t, string(got), want, "expected the marker saved earlier in this run")
+}
+
+// assertBashEnvPutsGoOnPath sources $BASH_ENV in a real shell and resolves `go`
+// from it, which is what a later job step does. bashenv.Path parses the file;
+// this checks a shell agrees, so a quoting or ordering mistake that the parser
+// tolerates still fails here.
+//
+// The bare-smoke CI job covers the same contract end to end, with a real job
+// runner sourcing the file between two steps. This is the local proxy for it.
+func assertBashEnvPutsGoOnPath(t *testing.T, bashEnvFile, wantGoBinDir string) {
+	t.Helper()
+
+	script := `set -e; . "$BASH_ENV"; command -v go`
+	cmd := exec.CommandContext(t.Context(), "bash", "-c", script) //nolint:gosec
+	cmd.Env = append(os.Environ(), "BASH_ENV="+bashEnvFile)
+
+	out, err := cmd.CombinedOutput()
+	assert.NilError(t, err, "sourcing $BASH_ENV and resolving go failed: %s", out)
+
+	resolved := strings.TrimSpace(string(out))
+	assert.Equal(t, filepath.Dir(resolved), wantGoBinDir,
+		"expected a later step to resolve go to the toolchain just installed, got %q", resolved)
 }

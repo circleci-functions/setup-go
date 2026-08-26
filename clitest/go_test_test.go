@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
 // TestCLI_Test exercises the `test` subcommand's CLI contract via a table of
@@ -126,6 +124,11 @@ func TestCLI_Test(t *testing.T) {
 		},
 	}
 
+	// One sandbox for the whole table: these cases only exercise flag
+	// pass-through, and a shared $HOME lets `go test` reuse its build cache
+	// between them instead of recompiling the fixture each time.
+	_, run := sandbox(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env, args := tt.setup(t)
@@ -163,8 +166,7 @@ func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := sdktest.NewServer(t)
-			srv.SetupEnv(t)
+			_, run := sandbox(t)
 
 			cacheDir := t.TempDir()
 			assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))

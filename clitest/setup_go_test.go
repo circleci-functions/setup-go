@@ -16,8 +16,6 @@ import (
 
 	"gotest.tools/v3/assert"
 
-	"github.com/circleci-functions/toolkit/sdk/sdktest"
-
 	"github.com/circleci-functions/setup-go/internal/testing/fakegodev"
 )
 
@@ -25,6 +23,7 @@ import (
 // present on PATH (needed by --detect-only to run `go env`). This is satisfied
 // in CI (cimg/go image) and on any standard dev machine.
 func TestCLI_Install_DetectOnly_ExportsEnv(t *testing.T) {
+	_, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
 	dir := t.TempDir()
 	bashEnvFile := filepath.Join(dir, "bash_env")
@@ -43,6 +42,7 @@ func TestCLI_Install_DetectOnly_ExportsEnv(t *testing.T) {
 // an explicit "install" subcommand — i.e. `setup-go --detect-only` is equivalent
 // to `setup-go install --detect-only`.
 func TestCLI_TopLevel_DetectOnly_ExportsEnv(t *testing.T) {
+	_, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
 	dir := t.TempDir()
 	bashEnvFile := filepath.Join(dir, "bash_env")
@@ -58,6 +58,7 @@ func TestCLI_TopLevel_DetectOnly_ExportsEnv(t *testing.T) {
 }
 
 func TestCLI_UnknownFlag(t *testing.T) {
+	_, run := sandbox(t)
 	_, err := run(t, nil, "install", "--no-such-flag")
 	assert.Assert(t, err != nil, "expected non-zero exit for unknown flag")
 }
@@ -95,32 +96,27 @@ func TestCLI_ToolchainCacheRoundTrip(t *testing.T) {
 	}))
 	t.Cleanup(godevSrv.Close)
 
-	installDir := t.TempDir()
-	srv := sdktest.NewServer(t)
-
-	bashEnvFile := filepath.Join(t.TempDir(), "bash_env")
-	t.Setenv("BASH_ENV", bashEnvFile)
-	t.Setenv("GOPATH", "")
-
-	srv.SetupEnv(t)
+	s, run := sandbox(t)
 
 	args := []string{
 		"install",
 		"--version", "1.22.3",
-		"--install-dir", installDir,
+		"--install-dir", s.InstallDir,
 		"--api-url", godevSrv.URL + "/",
-		"--bin-dir", t.TempDir(),
+		"--bin-dir", s.BinDir,
 	}
 
-	out, err := run(t, nil, args...)
+	env := map[string]string{"GOPATH": ""}
+
+	out, err := run(t, env, args...)
 	assert.NilError(t, err, "run 1 failed:\n%s", out)
 	assert.Equal(t, int(downloadCount.Load()), 1, "run 1 must download the tarball exactly once")
 
 	// Simulate a fresh executor: clear the install dir so the second run
 	// must rely on the cache rather than a locally present toolchain.
-	assert.NilError(t, os.RemoveAll(installDir))
+	assert.NilError(t, os.RemoveAll(s.InstallDir))
 
-	out, err = run(t, nil, args...)
+	out, err = run(t, env, args...)
 	assert.NilError(t, err, "run 2 failed:\n%s", out)
 	assert.Equal(t, int(downloadCount.Load()), 1, "run 2 must not re-download the tarball")
 }
@@ -128,6 +124,7 @@ func TestCLI_ToolchainCacheRoundTrip(t *testing.T) {
 // TestCLI_VersionFile_ReadsGoMod verifies that --version-file reads the go
 // directive from a go.mod file and uses it to select the toolchain version.
 func TestCLI_VersionFile_ReadsGoMod(t *testing.T) {
+	_, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{
 		fakegodev.PlatformRelease("go1.22.5", "aaa"),
 		fakegodev.PlatformRelease("go1.22.3", "bbb"),
@@ -183,6 +180,7 @@ esac
 }
 
 func TestCLI_CGOCheck_DetectOnly(t *testing.T) {
+	_, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
 	binDir := stubGoOnlyBinDir(t)
 	bashEnvFile := filepath.Join(t.TempDir(), "bash_env")

@@ -9,6 +9,7 @@ package setupgo_test
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,17 +47,33 @@ func runTests(m *testing.M) (int, error) {
 	return m.Run(), nil
 }
 
-// sandbox returns a sandbox wired to the real task-agent when inside a CircleCI
-// job and to the fake otherwise, plus a run function bound to its env.
+// sandbox returns a sandbox plus a run function bound to its env.
+//
+// The cache is CircleCI's own when the caller asks for it with
+// TOOLKIT_CACHE_MODE=live — which the CI job does, so the suite is exact
+// there — and in-memory otherwise, so the same suite runs on a laptop.
 func sandbox(t *testing.T) (*sdktest.Sandbox, func(*testing.T, map[string]string, ...string) (string, error)) {
 	t.Helper()
 	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
 	return s, func(t *testing.T, extraEnv map[string]string, args ...string) (string, error) {
 		t.Helper()
-		r := runner.New(t, binaryPath, runner.WithSandboxEnv(s.EnvWith(extraEnv)))
+		r := runner.New(t, binaryPath, runner.WithSandboxEnv(sandboxEnv(s, extraEnv)))
 		_, err := r.Run(args...)
 		return r.StdoutString() + r.StderrString(), err
 	}
+}
+
+// sandboxEnv returns the sandbox's environment with extra applied on top.
+//
+// GOROOT is cleared: `go test` sets it for this test process, and a Go
+// toolchain honours it over its own location — so leaving it set makes the
+// toolchain setup-go just installed run with the test runner's tools, and the
+// suite would pass without ever exercising what it downloaded.
+func sandboxEnv(s *sdktest.Sandbox, extra map[string]string) map[string]string {
+	env := s.Env()
+	env["GOROOT"] = ""
+	maps.Copy(env, extra)
+	return env
 }
 
 func fixtureDir(t *testing.T) string {

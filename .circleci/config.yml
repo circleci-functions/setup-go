@@ -71,6 +71,10 @@ jobs:
           command: task acceptance
           environment:
             SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
+            # Use the job's own cache rather than the in-memory stand-in, so the
+            # round-trips here exercise the real thing. The suite fails rather
+            # than falling back if it can't reach it.
+            TOOLKIT_CACHE_MODE: live
 
   # The one property that needs an image without Go: the shipped artifact
   # bootstraps a toolchain from nothing and leaves it on PATH for later steps.

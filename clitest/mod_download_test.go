@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
 
 // stubGoModDownloadPATH returns a PATH directory containing a `go` stub that
@@ -45,8 +43,7 @@ exit 1
 // invocation under the same checksum restores it before `go mod download`
 // (rather than downloading again) and re-saves it.
 func TestCLI_ModDownload_CacheRoundTrip(t *testing.T) {
-	srv := sdktest.NewServer(t)
-	srv.SetupEnv(t)
+	_, run := sandbox(t)
 
 	modCacheDir := t.TempDir()
 	assert.NilError(t, os.WriteFile(filepath.Join(modCacheDir, "marker"), []byte("hit"), 0600))
@@ -101,7 +98,6 @@ func TestCLI_ModDownload(t *testing.T) {
 		{
 			name: "Path_OverridesGoEnvLookup",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				sdktest.NewServer(t).SetupEnv(t)
 				logFile := filepath.Join(t.TempDir(), "go-stub.log")
 				env := map[string]string{"PATH": stubGoModDownloadPATH(t, logFile, t.TempDir(), 0)}
 				t.Cleanup(func() {
@@ -115,7 +111,6 @@ func TestCLI_ModDownload(t *testing.T) {
 		{
 			name: "ModPath_EmptyString_ReturnsError",
 			setup: func(t *testing.T) (map[string]string, []string) {
-				sdktest.NewServer(t).SetupEnv(t)
 				env := map[string]string{"PATH": stubGoModDownloadPATH(t, filepath.Join(t.TempDir(), "go-stub.log"), t.TempDir(), 0)}
 				return env, []string{"mod-download", "--mod-path", ""}
 			},
@@ -152,6 +147,8 @@ func TestCLI_ModDownload(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			_, run := sandbox(t)
+
 			env, args := tt.setup(t)
 			out, err := run(t, env, args...)
 
