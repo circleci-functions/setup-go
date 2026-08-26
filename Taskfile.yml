@@ -17,9 +17,14 @@ tasks:
       - go tool golangci-lint run ./...
 
   test:
-    desc: Run unit and acceptance tests (hermetic, no network)
+    desc: Run unit and CLI tests (hermetic, no network)
     cmds:
       - go tool gotestsum -- ./...
+
+  acceptance:
+    desc: Run acceptance tests against real go.dev (network required; safe to run locally)
+    cmds:
+      - go test -tags acceptance -v -timeout 20m ./acceptance/...
 
   tidy:
     desc: Tidy go.mod / go.sum

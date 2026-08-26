@@ -223,15 +223,35 @@ deferred.
 
 ## Tests
 
-Unit tests live under `{goversion,install,jobenv,cache,goenv}/` and call the
-exported API directly — `install`/`goversion`/`jobenv` via a fake go.dev server
-(`internal/testing/fakegodev`), `cache` via a fake CircleCI plugin server
-(`github.com/circleci-functions/toolkit/sdk/sdktest`), `goenv` against the real
-`go` binary (no network involved). No network access required.
+Three layers, each in the cheapest place that can hold it.
 
-Acceptance tests live under `acceptance/` and compile the real `setup-go`
-binary in `TestMain`, then run it as a subprocess to verify the CLI contract
-(`--help`, `install --detect-only` writing `$BASH_ENV`, `test` flag
-passthrough, `cache` round-trips, unknown-flag exit code). They also use
-`fakegodev`/`sdktest` so no network is required. Both suites run together
-under `task test`.
+**Unit** — `{goversion,install,jobenv,cache,goenv}/` call the exported API
+directly: `install`/`goversion`/`jobenv` via a fake go.dev server
+(`internal/testing/fakegodev`), `cache` via a fake CircleCI plugin server
+(`toolkit/sdk/sdktest`), `goenv` against the real `go` binary.
+
+**CLI** — `clitest/` compiles the real binary and runs it as a subprocess to
+cover the whole flag surface and its error paths: every subcommand, unknown
+flags, exit codes, and cache round-trips against the fake plugin server. Each
+test runs in a `toolkit/testing/functest` sandbox, so `$HOME`, `$BASH_ENV`, the
+install dir and the symlink dir are all temp locations.
+
+Both layers are hermetic and need no network. Run with `task test`.
+
+**Acceptance** — `acceptance/`, behind a `//go:build acceptance` tag so it stays
+out of `task test`/`task ci`. Same sandboxing, but against real infrastructure:
+a real go.dev download, and a real CircleCI task-agent when running inside a job
+(`functest.WithRealAgent` falls back to the fake elsewhere, so the suite still
+runs on a laptop). Run with `task acceptance`; it needs network access but will
+not touch your real home directory, `/usr/local/bin`, or a shared cache key.
+
+Cache round-trips use a per-run checksum (`sdk.RunID`). CircleCI cache keys are
+write-once, so a constant checksum would make the second run in a rotation
+window restore the first run's data instead of its own.
+
+In CI, `acceptance` runs on the Go executor — it installs into temp dirs and
+asserts the toolchain it put on `PATH` is the one it installed, so a preinstalled
+Go can't produce a false pass. A separate two-step `bare-smoke` job covers the
+one property that genuinely needs an image without Go: the cross-compiled
+artifact `publish` is about to ship bootstraps a toolchain from nothing and
+leaves it on `PATH` for later steps.

@@ -1,4 +1,4 @@
-package setupgo_test
+package clitest_test
 
 import (
 	"os"
@@ -8,20 +8,7 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/circleci-functions/toolkit/sdk/sdktest"
 )
-
-// fixtureDir resolves acceptance/test-project to an absolute path. The
-// compiled setup-go binary is run with its own temp directory as its working
-// directory (see runner.Runner.cmdDir), so a relative --project-path would
-// resolve against the wrong directory.
-func fixtureDir(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs("test-project")
-	assert.NilError(t, err)
-	return abs
-}
 
 // TestCLI_Test exercises the `test` subcommand's CLI contract via a table of
 // cases, each providing its own env/args setup and expectations on the
@@ -137,6 +124,11 @@ func TestCLI_Test(t *testing.T) {
 		},
 	}
 
+	// One sandbox for the whole table: these cases only exercise flag
+	// pass-through, and a shared $HOME lets `go test` reuse its build cache
+	// between them instead of recompiling the fixture each time.
+	_, run := sandbox(t)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			env, args := tt.setup(t)
@@ -174,8 +166,7 @@ func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv := sdktest.NewServer(t)
-			srv.SetupEnv(t)
+			s, run := sandbox(t)
 
 			cacheDir := t.TempDir()
 			assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
@@ -191,8 +182,8 @@ func TestCLI_Test_BuildCacheRoundTrip(t *testing.T) {
 
 			// The save is registered to run at the end of the job, so it has
 			// not happened yet when the command exits.
-			assert.Equal(t, len(srv.PendingCacheSaves()), 1)
-			srv.EndJob(t)
+			assert.Equal(t, len(s.Cache.PendingCacheSaves()), 1)
+			s.Cache.EndJob(t)
 
 			assert.NilError(t, os.RemoveAll(cacheDir))
 

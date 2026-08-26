@@ -8,14 +8,13 @@ parameters:
     type: string
     default: "1.26.4"
     description: >-
-      Go version for the smoke test to install.
+      Go version for the acceptance tests to install.
 
 executors:
   go:
     docker:
       - image: cimg/go:1.26
-  # The smoke test execs the binary `build` just cross-compiled, so it runs
-  # on a bare base image rather than a language-preinstalled one.
+  # bare-smoke execs the binary `build` cross-compiled, on an image with no Go.
   base:
     docker:
       - image: cimg/base:stable
@@ -39,7 +38,7 @@ jobs:
             - ~/go/pkg/mod
 
   # Cross-compiles setup-go into ./dist and persists it to the workspace, so
-  # smoke-test exercises exactly what `publish` is about to ship.
+  # bare-smoke exercises exactly what `publish` is about to ship.
   build:
     executor: go
     steps:
@@ -55,60 +54,40 @@ jobs:
           paths:
             - dist
 
-  smoke-test:
-    executor: base
+  # Real go.dev downloads and a real task-agent. Runs on the go executor: the
+  # suite installs into temp dirs and asserts the toolchain it put on PATH is
+  # the one it installed, so a preinstalled Go can't produce a false pass.
+  acceptance:
+    executor: go
     steps:
       - checkout
-      - attach_workspace:
-          at: .
-      - run:
-          name: Install Go
-          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}'
-      - run: go version
-      - run:
-          name: Remove install
-          command: rm -rf ~/.cache/setup-go
-      - run:
-          name: Install Go (expect cache hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >> --go-cache-checksum '{{ checksum "go.sum" }}' 2>&1 | tee /tmp/setup-go-second-run.log
-            grep -q "restored from cache" /tmp/setup-go-second-run.log
-      - run:
-          name: Test command
-          command: ./dist/setup-go/linux/amd64/setup-go test --project-path ./acceptance/test-project/
       - toolkit/private-mod-init
       - restore_cache:
           keys:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run:
-          name: Load lint cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
+          name: Run acceptance tests
+          command: task acceptance
+          environment:
+            SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
+            # Use the job's own cache rather than the in-memory stand-in, so the
+            # round-trips here exercise the real thing. The suite fails rather
+            # than falling back if it can't reach it.
+            TOOLKIT_CACHE_MODE: live
+
+  # The one property that needs an image without Go: the shipped artifact
+  # bootstraps a toolchain from nothing and leaves it on PATH for later steps.
+  bare-smoke:
+    executor: base
+    steps:
+      - checkout
+      - attach_workspace:
+          at: .
       - run:
-          name: Run golangci-lint
-          command: go tool golangci-lint run ./...
-      - run:
-          name: Save lint cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache save --golangci-lint --checksum '{{ checksum "go.sum" }}'
-      - run:
-          name: Remove lint cache
-          command: rm -rf ~/.cache/golangci-lint
-      - run:
-          name: Load lint cache (expect hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
-            test -n "$(ls -A ~/.cache/golangci-lint)"
-      - run:
-          name: Save build cache
-          command: ./dist/setup-go/linux/amd64/setup-go cache save --build --checksum '{{ checksum "go.sum" }}'
-      - run:
-          name: Remove build cache
-          command: rm -rf "$(go env GOCACHE)"
-      - run:
-          name: Load build cache (expect hit)
-          command: |
-            ./dist/setup-go/linux/amd64/setup-go cache load --build --checksum '{{ checksum "go.sum" }}'
-            test -n "$(ls -A "$(go env GOCACHE)")"
+          name: Install Go from nothing
+          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >>
+      - run: go version
 
   publish:
     executor: go
@@ -143,14 +122,18 @@ workflows:
           filters:
             tags:
               only: /.*/
-      - smoke-test:
-          requires: [build]
+      - acceptance:
           context: [github-readonly]
           filters:
             tags:
               only: /.*/
+      - bare-smoke:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
       - publish:
-          requires: [test, smoke-test]
+          requires: [test, acceptance, bare-smoke]
           context: [functions-publisher, github-readonly]
           filters:
             tags:
