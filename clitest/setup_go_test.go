@@ -73,7 +73,7 @@ func TestCLI_ToolchainCacheRoundTrip(t *testing.T) {
 	goBinScript := fmt.Sprintf(
 		"#!/bin/sh\ncase \"$1\" in\n"+
 			"  version) echo 'go version %s %s/%s' ;;\n"+
-			"  env) shift; for v in \"$@\"; do case \"$v\" in GOPATH) echo /tmp/testgopath ;; *) echo \"\" ;; esac; done ;;\n"+
+			"  env) shift; if [ \"$1\" = -json ]; then echo '{\"GOPATH\":\"/tmp/testgopath\"}'; else for v in \"$@\"; do case \"$v\" in GOPATH) echo /tmp/testgopath ;; *) echo \"\" ;; esac; done; fi ;;\n"+
 			"esac\n",
 		version, runtime.GOOS, runtime.GOARCH)
 
@@ -161,6 +161,10 @@ func stubGoOnlyBinDir(t *testing.T) string {
 case "$1" in
   env)
     shift
+    if [ "$1" = -json ]; then
+      echo '{"GOMODCACHE":"/fake/go/pkg/mod","GOCACHE":"/fake/cache/go-build","GOPATH":"/fake/go"}'
+      exit 0
+    fi
     for v in "$@"; do
       case "$v" in
         GOMODCACHE) echo "/fake/go/pkg/mod" ;;
