@@ -32,13 +32,22 @@ type cli struct {
 }
 
 type installCmd struct {
-	Version         string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable"`
-	VersionFile     string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from. Overrides --version when set." default:""`
-	DetectOnly      bool   `help:"Detect and export env using the Go already on PATH, without installing."`
-	InstallDir      string `help:"Base directory for Go toolchain installs." default:"${default_install_dir}"`
-	APIURL          string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
-	GoCacheChecksum string `name:"go-cache-checksum" help:"Optional checksum to partition the toolchain cache; different checksums force a re-download even for the same Go version." default:""`
-	BinDir          string `name:"bin-dir" help:"Override the directory go/gofmt are symlinked into." hidden:"" default:""`
+	Version           string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable"`
+	VersionFile       string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from. Overrides --version when set." default:""`
+	DetectOnly        bool   `help:"Detect and export env using the Go already on PATH, without installing."`
+	InstallDir        string `help:"Base directory for Go toolchain installs." default:"${default_install_dir}"`
+	APIURL            string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
+	ToolchainChecksum string `name:"toolchain-checksum" help:"Optional checksum to partition the toolchain cache; different checksums force a re-download even for the same Go version." default:""`
+	BinDir            string `name:"bin-dir" help:"Override the directory go/gofmt are symlinked into." hidden:"" default:""`
+
+	// Job caches restored here and saved at the end of the job, so the steps in
+	// between need no cache steps of their own. Defaults differ from `cache
+	// load`, hence the repeated flags rather than an embedded cacheFlags.
+	GoMod        bool   `help:"Restore the go module cache and save it at the end of the job." default:"true"`
+	Build        bool   `help:"Restore the go build cache (GOCACHE) and save it at the end of the job." default:"true"`
+	GolangCILint bool   `name:"golangci-lint" help:"Restore golangci-lint's cache and save it at the end of the job." default:"false"`
+	Key          string `help:"Optional cache key component to partition the job caches."`
+	Checksum     string `help:"Optional checksum to partition the job caches. Different checksums force a cache miss."`
 }
 
 func (i *installCmd) Run(ctx context.Context, client *sdk.Client) error {
@@ -58,7 +67,7 @@ func (i *installCmd) Run(ctx context.Context, client *sdk.Client) error {
 	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", spec, ver.Name)
 
 	goroot, err := install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
-		GoCacheChecksum: i.GoCacheChecksum,
+		GoCacheChecksum: i.ToolchainChecksum,
 		InstallDir:      i.InstallDir,
 		DetectOnly:      i.DetectOnly,
 		BinDir:          i.BinDir,
@@ -78,6 +87,42 @@ func (i *installCmd) Run(ctx context.Context, client *sdk.Client) error {
 	}
 	fmt.Fprintf(os.Stderr, "setup-go: wrote env exports to %s\n", os.Getenv("BASH_ENV"))
 	_ = cgoalpine.InstallToolchain(ctx, cgoalpine.DefaultOSReleasePath)
+
+	return i.setupJobCaches(ctx, client, goBinary)
+}
+
+// setupJobCaches restores the selected caches and registers their saves for the
+// end of the job, so the steps that populate them need no cache steps at all.
+func (i *installCmd) setupJobCaches(ctx context.Context, client *sdk.Client, goBinary string) error {
+	if !i.GoMod && !i.Build && !i.GolangCILint {
+		return nil
+	}
+
+	var env *goenv.GoEnv
+	if i.GoMod || i.Build {
+		// The go just installed, not whatever is on PATH: WriteEnv above only
+		// takes effect for later steps.
+		var err error
+		if env, err = goenv.LoadFrom(ctx, goBinary); err != nil {
+			return err
+		}
+	}
+
+	if i.GoMod {
+		cache.RestoreGoModCache(ctx, client, i.Key, i.Checksum)
+		cache.SaveGoModCache(ctx, client.AtTeardown(), i.Key, i.Checksum, env.GOMODCACHE)
+	}
+
+	if i.Build {
+		cache.RestoreBuildCache(ctx, client, i.Key, i.Checksum)
+		cache.SaveBuildCache(ctx, client.AtTeardown(), i.Key, i.Checksum, env.GOCACHE)
+	}
+
+	if i.GolangCILint {
+		cache.RestoreLintCache(ctx, client, i.Key, i.Checksum)
+		cache.SaveLintCache(ctx, client.AtTeardown(), i.Key, i.Checksum)
+	}
+
 	return nil
 }
 

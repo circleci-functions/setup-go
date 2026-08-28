@@ -37,7 +37,10 @@ func TestAcceptance_Smoke(t *testing.T) {
 		"--version", version,
 		"--install-dir", s.InstallDir,
 		"--bin-dir", s.BinDir,
-		"--go-cache-checksum", checksum,
+		"--toolchain-checksum", checksum,
+		// Isolates the module and build caches per run, as the nonce already
+		// does for the toolchain cache.
+		"--checksum", checksum,
 	}
 
 	var goBinDir string

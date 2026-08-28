@@ -21,12 +21,14 @@ job steps pick it up automatically, run `go test`, and manage tool caches
    `musl-dev` via `apk` so `CGO_ENABLED=1` builds work. This is a no-op on
    any other platform. Failures (e.g. `apk add` failing, or failing to determine
    the current Linux distro) are silent and never fail the go installation.
+6. Restores the go module and build caches, and registers their saves to run at
+   the end of the job.
 
 ```yaml
 steps:
   - run:
       name: Set up Go
-      command: circleci run setup-go@<version> -- install --version 1.22
+      command: circleci run setup-go@<version> -- install --version 1.22 --checksum '{{ checksum "go.sum" }}'
   - run: go test ./...
 ```
 
@@ -38,7 +40,12 @@ steps:
 | `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the Go version from its `go` directive. Overrides `--version` when set. |
 | `--detect-only` | false | Use the `go` already on `PATH`; skip download and install |
 | `--install-dir` | `~/.cache/setup-go` | Base directory for extracted toolchains |
-| `--go-cache-checksum` | (empty) | Optional checksum to partition the toolchain cache; different checksums force a re-download even for the same Go version |
+| `--toolchain-checksum` | (empty) | Optional checksum to partition the toolchain cache; different checksums force a re-download even for the same Go version |
+| `--go-mod` | true | Restore the go module cache (`GOMODCACHE`) and save it at the end of the job |
+| `--build` | true | Restore the go build cache (`GOCACHE`) and save it at the end of the job |
+| `--golangci-lint` | false | Restore golangci-lint's cache and save it at the end of the job |
+| `--key` | (empty) | Optional cache key component to partition the job caches |
+| `--checksum` | (empty) | Optional checksum to partition the job caches; different checksums force a cache miss |
 
 Version spec semantics:
 
@@ -62,6 +69,13 @@ installed toolchain to cache; on subsequent runs it restores from cache before
 checking the local filesystem, so the download is skipped even on a fresh
 executor. Cache errors (e.g. running outside a job) are non-fatal and fall back
 to a normal install.
+
+`install` also warms the caches the rest of the job needs. It restores the go
+module and build caches up front and saves them once the job's steps are done,
+so nothing between needs a cache step of its own, and a job that fails, is
+cancelled or times out still keeps what it downloaded and compiled. Pass
+`--checksum` to partition those caches, `--go-mod=false` or `--build=false` to
+opt out, and `--golangci-lint` to include the lint cache.
 
 ## test
 

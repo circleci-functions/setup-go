@@ -290,7 +290,7 @@ func TestEnsureCached_CacheErrorIsNonFatal(t *testing.T) {
 }
 
 // TestEnsureCached_GoCacheChecksumPartitionsCache verifies that different
-// --go-cache-checksum values produce distinct cache keys: a restore only hits
+// --toolchain-checksum values produce distinct cache keys: a restore only hits
 // when the checksum matches the entry that was saved.
 func TestEnsureCached_GoCacheChecksumPartitionsCache(t *testing.T) {
 	const version = "go1.22.3"

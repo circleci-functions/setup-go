@@ -92,11 +92,16 @@ func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string)
 	sdk.LogCacheErr("save go mod", err)
 }
 
-// goModCacheKey mirrors the circleci/go orb's cache key:
+// goModCacheKey is the circleci/go orb's go-mod key plus the rotating epoch the
+// orb only applies to its other caches:
 //
-// v1-<< parameters.key >>-go-mod-{{ arch }}-<< parameters.checksum >>
+// v1-<< parameters.key >>-go-mod-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+//
+// Without the epoch a caller that passes no checksum has a constant key, and
+// since a save is skipped when the key already exists the cache would keep its
+// first contents forever.
 func goModCacheKey(key, checksum string) string {
-	return fmt.Sprintf("v1-%s-go-mod-%s-%s", key, sdk.OSArch(), checksum)
+	return fmt.Sprintf("v1-%s-go-mod-%s-%s-%d", key, sdk.OSArch(), checksum, rotationEpoch())
 }
 
 // RestoreBuildCache restores the go build cache (GOCACHE), trying the ordered
