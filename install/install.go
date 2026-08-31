@@ -98,7 +98,8 @@ func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, 
 	}
 
 	key := toolchainCacheKey(v, options.GoCacheChecksum)
-	_, err := client.RestoreCache(ctx, []string{key})
+	_, err := client.RestoreCache(ctx, []string{key},
+		sdk.WithStepName("Restoring Go toolchain cache"))
 	sdk.LogCacheErr("restore", err)
 	if err == nil && AlreadyInstalled(options.InstallDir, v) {
 		goroot := filepath.Join(options.InstallDir, v.Name)
@@ -111,7 +112,8 @@ func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, 
 		return "", err
 	}
 
-	sdk.LogCacheErr("save", client.SaveCache(ctx, key, []string{goroot}))
+	sdk.LogCacheErr("save", client.SaveCache(ctx, key, []string{goroot},
+		sdk.WithStepName("Saving Go toolchain cache")))
 	return goroot, nil
 }
 
