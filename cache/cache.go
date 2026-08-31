@@ -19,7 +19,7 @@ const cacheRotation = 72 * time.Hour
 // returned by Client.AtTeardown satisfy it, so a caller chooses whether the
 // save runs immediately or at the end of the job.
 type Saver interface {
-	SaveCache(ctx context.Context, key string, paths []string) error
+	SaveCache(ctx context.Context, key string, paths []string, opts ...sdk.CacheOption) error
 }
 
 // LintCacheDir returns golangci-lint's cache directory. It currently always
@@ -37,7 +37,8 @@ func LintCacheDir() (string, error) {
 // best-effort: a cache-call failure is logged to stderr and never blocks the
 // test run.
 func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)})
+	_, err := client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)},
+		sdk.WithStepName("Restoring golangci-lint cache"))
 	sdk.LogCacheErr("restore lint", err)
 }
 
@@ -51,7 +52,8 @@ func SaveLintCache(ctx context.Context, saver Saver, key, checksum string) {
 		return
 	}
 
-	sdk.LogCacheErr("save lint", saver.SaveCache(ctx, lintCacheKey(key, checksum), []string{dir}))
+	sdk.LogCacheErr("save lint", saver.SaveCache(ctx, lintCacheKey(key, checksum), []string{dir},
+		sdk.WithStepName("Saving golangci-lint cache")))
 }
 
 // lintCacheKey mirrors the circleci/go orb's cache key:
@@ -83,12 +85,14 @@ func rotationEpoch() int64 {
 }
 
 func RestoreGoModCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{goModCacheKey(key, checksum)})
+	_, err := client.RestoreCache(ctx, []string{goModCacheKey(key, checksum)},
+		sdk.WithStepName("Restoring go module cache"))
 	sdk.LogCacheErr("restore go mod", err)
 }
 
 func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string) {
-	err := saver.SaveCache(ctx, goModCacheKey(key, checksum), []string{dir})
+	err := saver.SaveCache(ctx, goModCacheKey(key, checksum), []string{dir},
+		sdk.WithStepName("Saving go module cache"))
 	sdk.LogCacheErr("save go mod", err)
 }
 
@@ -108,12 +112,14 @@ func goModCacheKey(key, checksum string) string {
 // fallback keys from buildRestoreKeys so a rotation boundary or a dependency
 // bump warm-starts from a near miss instead of compiling from cold.
 func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, buildRestoreKeys(key, checksum))
+	_, err := client.RestoreCache(ctx, buildRestoreKeys(key, checksum),
+		sdk.WithStepName("Restoring go build cache"))
 	sdk.LogCacheErr("restore go build", err)
 }
 
 func SaveBuildCache(ctx context.Context, saver Saver, key, checksum, dir string) {
-	err := saver.SaveCache(ctx, buildCacheKey(key, checksum), []string{dir})
+	err := saver.SaveCache(ctx, buildCacheKey(key, checksum), []string{dir},
+		sdk.WithStepName("Saving go build cache"))
 	sdk.LogCacheErr("save go build", err)
 }
 
