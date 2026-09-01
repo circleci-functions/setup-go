@@ -72,9 +72,12 @@ func Ensure(ctx context.Context, v goversion.Version, installDir, binDir string,
 }
 
 type EnsureCachedOptions struct {
-	GoCacheChecksum string
-	InstallDir      string
-	DetectOnly      bool
+	InstallDir string
+	DetectOnly bool
+	NoCache    bool
+	// CacheNonce partitions the toolchain cache. Only the acceptance suite
+	// sets it, so a run cannot restore an earlier run's toolchain.
+	CacheNonce string
 	// BinDir is where go/gofmt are symlinked on a fresh install, so they're
 	// on PATH even for processes that don't source $BASH_ENV. Defaults to
 	// DefaultBinDir when empty.
@@ -85,19 +88,19 @@ type EnsureCachedOptions struct {
 // before downloading, and saves it to cache after a fresh install. Cache errors
 // are non-fatal — a cache hiccup never blocks the install.
 //
-// When detectOnly is true or the toolchain is already locally installed, it
-// delegates straight to Ensure with no cache calls.
+// When NoCache or DetectOnly is set, or the toolchain is already locally
+// installed, it delegates straight to Ensure with no cache calls.
 func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, options EnsureCachedOptions) (string, error) {
 	binDir := options.BinDir
 	if binDir == "" {
 		binDir = DefaultBinDir
 	}
 
-	if options.DetectOnly || AlreadyInstalled(options.InstallDir, v) {
+	if options.NoCache || options.DetectOnly || AlreadyInstalled(options.InstallDir, v) {
 		return Ensure(ctx, v, options.InstallDir, binDir, options.DetectOnly)
 	}
 
-	key := toolchainCacheKey(v, options.GoCacheChecksum)
+	key := toolchainCacheKey(v, options.CacheNonce)
 	_, err := client.RestoreCache(ctx, []string{key},
 		sdk.WithStepName("Restoring Go toolchain cache"))
 	sdk.LogCacheErr("restore", err)
@@ -119,10 +122,10 @@ func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, 
 
 // toolchainCacheKey returns the cache key for the given Go toolchain version.
 // The v1 prefix leaves room to change what's cached without colliding with old entries.
-func toolchainCacheKey(v goversion.Version, goCacheChecksum string) string {
+func toolchainCacheKey(v goversion.Version, nonce string) string {
 	key := fmt.Sprintf("setup-go-toolchain-v1-%s-%s", sdk.OSArch(), v.Name)
-	if goCacheChecksum != "" {
-		key += "-" + goCacheChecksum
+	if nonce != "" {
+		key += "-" + nonce
 	}
 	return key
 }

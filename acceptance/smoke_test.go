@@ -29,18 +29,16 @@ func acceptanceVersion() string {
 // a step fails.
 func TestAcceptance_Smoke(t *testing.T) {
 	s, run := sandbox(t)
-	checksum := s.CacheKeyNonce
 	version := acceptanceVersion()
 
 	installArgs := []string{
-		"install",
 		"--version", version,
 		"--install-dir", s.InstallDir,
 		"--bin-dir", s.BinDir,
-		"--toolchain-checksum", checksum,
-		// Isolates the module and build caches per run, as the nonce already
-		// does for the toolchain cache.
-		"--checksum", checksum,
+		// Isolates this run's caches, so the cold install below cannot hit an
+		// entry left by an earlier run.
+		"--cache-nonce", s.CacheKeyNonce,
+		"--checksum", s.CacheKeyNonce,
 	}
 
 	var goBinDir string
@@ -48,7 +46,7 @@ func TestAcceptance_Smoke(t *testing.T) {
 		out, err := run(t, nil, installArgs...)
 		assert.NilError(t, err, "got: %s", out)
 		assert.Assert(t, !strings.Contains(out, "restored from cache"),
-			"a per-run checksum must miss the cache, so this step downloads for real; got: %s", out)
+			"a per-run nonce must miss the cache, so this step downloads for real; got: %s", out)
 
 		goBinDir = installedGoBinDir(t, s.BashEnv, s.InstallDir)
 		assertGoVersion(t, goBinDir, version)
@@ -71,45 +69,6 @@ func TestAcceptance_Smoke(t *testing.T) {
 
 	t.Run("BashEnv_SourcesIntoALaterStep", func(t *testing.T) {
 		assertBashEnvPutsGoOnPath(t, s.BashEnv, goBinDir)
-	})
-
-	// The installed toolchain, not whatever `go` the executor came with.
-	goPath := map[string]string{"PATH": goBinDir + string(os.PathListSeparator) + os.Getenv("PATH")}
-
-	t.Run("RunTestSubcommand", func(t *testing.T) {
-		out, err := run(t, goPath, "test", "--project-path", fixtureDir(t))
-		assert.NilError(t, err, "got: %s", out)
-	})
-
-	t.Run("GolangCILintCache_RoundTrip", func(t *testing.T) {
-		lintDir := filepath.Join(s.Home, ".cache", "golangci-lint")
-		assert.NilError(t, os.MkdirAll(lintDir, 0750))
-		assert.NilError(t, os.WriteFile(filepath.Join(lintDir, "marker"), []byte("hit"), 0600))
-
-		out, err := run(t, nil, "cache", "save", "--golangci-lint", "--checksum", checksum)
-		assert.NilError(t, err, "save failed: %s", out)
-
-		assert.NilError(t, os.RemoveAll(lintDir))
-
-		out, err = run(t, nil, "cache", "load", "--golangci-lint", "--checksum", checksum)
-		assert.NilError(t, err, "load failed: %s", out)
-
-		assertMarker(t, lintDir, "hit")
-	})
-
-	t.Run("BuildCache_RoundTrip", func(t *testing.T) {
-		cacheDir := t.TempDir()
-		assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
-
-		out, err := run(t, goPath, "cache", "save", "--build", "--build-path", cacheDir, "--checksum", checksum)
-		assert.NilError(t, err, "save failed: %s", out)
-
-		assert.NilError(t, os.RemoveAll(cacheDir))
-
-		out, err = run(t, goPath, "cache", "load", "--build", "--checksum", checksum)
-		assert.NilError(t, err, "load failed: %s", out)
-
-		assertMarker(t, cacheDir, "hit")
 	})
 }
 
@@ -134,13 +93,6 @@ func assertGoVersion(t *testing.T, goBinDir, want string) {
 		assert.Assert(t, strings.Contains(string(out), "go"+want),
 			"expected the installed toolchain to be go%s, got: %s", want, out)
 	}
-}
-
-func assertMarker(t *testing.T, dir, want string) {
-	t.Helper()
-	got, err := os.ReadFile(filepath.Join(dir, "marker")) //nolint:gosec
-	assert.NilError(t, err, "expected the cache to restore %s", dir)
-	assert.Equal(t, string(got), want, "expected the marker saved earlier in this run")
 }
 
 // assertBashEnvPutsGoOnPath sources $BASH_ENV in a real shell and resolves `go`

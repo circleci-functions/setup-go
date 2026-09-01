@@ -86,7 +86,7 @@ jobs:
           at: .
       - run:
           name: Install Go from nothing
-          command: ./dist/setup-go/linux/amd64/setup-go install --version << pipeline.parameters.go-version >>
+          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
       - run: go version
 
   publish:

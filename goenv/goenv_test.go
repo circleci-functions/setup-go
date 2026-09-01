@@ -9,20 +9,20 @@ import (
 	"github.com/circleci-functions/setup-go/goenv"
 )
 
-// TestLoad runs the real `go env -json` (no network access involved) and
-// checks a couple of fields against known-good values, to catch e.g. the
-// exec/JSON-decode plumbing breaking.
-func TestLoad(t *testing.T) {
-	e, err := goenv.Load()
+// TestLoadFrom runs the real `go env -json` (no network access involved) and
+// checks a field against a known-good value, to catch e.g. the exec/JSON-decode
+// plumbing breaking.
+func TestLoadFrom(t *testing.T) {
+	e, err := goenv.LoadFrom(t.Context(), "go")
 	assert.NilError(t, err)
 	assert.Assert(t, e.GOMODCACHE != "", "expected GOMODCACHE to be set")
 }
 
-// TestLoad_GoNotOnPath verifies Load surfaces a clear error rather than
-// panicking or returning a zero-value GoEnv when `go` isn't on PATH.
-func TestLoad_GoNotOnPath(t *testing.T) {
+// TestLoadFrom_GoNotOnPath verifies a clear error rather than a panic or a
+// zero-value GoEnv when the go binary can't be found.
+func TestLoadFrom_GoNotOnPath(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	_, err := goenv.Load()
+	_, err := goenv.LoadFrom(t.Context(), "go")
 	assert.ErrorContains(t, err, "go env -json")
 }
 
@@ -38,8 +38,8 @@ func TestGoEnv_JSONUnmarshal(t *testing.T) {
 	}{
 		{
 			name:  "PopulatesKnownFields",
-			input: `{"GOMODCACHE":"/home/x/go/pkg/mod","GOPATH":"/home/x/go"}`,
-			want:  goenv.GoEnv{GOMODCACHE: "/home/x/go/pkg/mod", GOPATH: "/home/x/go"},
+			input: `{"GOCACHE":"/home/x/.cache/go-build","GOMODCACHE":"/home/x/go/pkg/mod"}`,
+			want:  goenv.GoEnv{GOCACHE: "/home/x/.cache/go-build", GOMODCACHE: "/home/x/go/pkg/mod"},
 		},
 		{
 			name:  "IgnoresUnknownFields",

@@ -11,65 +11,10 @@ import (
 	"github.com/circleci-functions/setup-go/internal/testing/fakegodev"
 )
 
-// TestCLI_Cache_Build_SavesGoCacheNotModCache verifies that without
-// --build-path, `cache save --build` saves the directory `go env` reports as
-// GOCACHE — not GOMODCACHE, whose value it also has to hand.
-func TestCLI_Cache_Build_SavesGoCacheNotModCache(t *testing.T) {
-	_, run := sandbox(t)
-
-	goCache := t.TempDir()
-	modCache := t.TempDir()
-	assert.NilError(t, os.WriteFile(filepath.Join(goCache, "marker"), []byte("build"), 0600))
-	assert.NilError(t, os.WriteFile(filepath.Join(modCache, "marker"), []byte("mod"), 0600))
-
-	env := map[string]string{"PATH": stubGoEnvPATH(t, goCache, modCache)}
-
-	out, err := run(t, env, "cache", "save", "--build", "--checksum", "checksum-a")
-	assert.NilError(t, err, "save failed:\n%s", out)
-
-	assert.NilError(t, os.RemoveAll(goCache))
-	assert.NilError(t, os.RemoveAll(modCache))
-
-	out, err = run(t, env, "cache", "load", "--build", "--checksum", "checksum-a")
-	assert.NilError(t, err, "load failed:\n%s", out)
-
-	got, err := os.ReadFile(filepath.Join(goCache, "marker")) //nolint:gosec
-	assert.NilError(t, err, "expected GOCACHE to be the saved directory")
-	assert.Equal(t, string(got), "build")
-
-	_, err = os.Stat(filepath.Join(modCache, "marker"))
-	assert.Assert(t, os.IsNotExist(err), "expected GOMODCACHE not to be saved by --build")
-}
-
-// stubGoEnvPATH returns a PATH directory containing a `go` stub that answers
-// `go env -json` with distinct GOCACHE and GOMODCACHE values, so a test can
-// tell which one the CLI picked.
-func stubGoEnvPATH(t *testing.T, goCache, modCache string) string {
-	t.Helper()
-	dir := t.TempDir()
-	script := fmt.Sprintf(`#!/bin/sh
-case "$1 $2" in
-  "env -json") echo '{"GOCACHE":%q,"GOMODCACHE":%q}' ;;
-  *) exit 1 ;;
-esac
-`, goCache, modCache)
-	assert.NilError(t, os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0750)) //nolint:gosec
-	return dir
-}
-
-// TestCLI_Cache_NoTarget_ReturnsError verifies that omitting --golangci-lint
-// (the only cache target implemented so far) is an error rather than a
-// silent no-op.
-func TestCLI_Cache_NoTarget_ReturnsError(t *testing.T) {
-	_, run := sandbox(t)
-	_, err := run(t, nil, "cache", "load")
-	assert.ErrorContains(t, err, "exit status 1")
-}
-
-// TestCLI_Install_RegistersJobCacheSaves verifies that `install` restores the
-// module and build caches and registers their saves for the end of the job,
-// rather than saving during the command.
-func TestCLI_Install_RegistersJobCacheSaves(t *testing.T) {
+// TestCLI_RegistersJobCacheSaves verifies that setup-go restores the module and
+// build caches and registers their saves for the end of the job, rather than
+// saving during the command.
+func TestCLI_RegistersJobCacheSaves(t *testing.T) {
 	s, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
 
@@ -85,9 +30,10 @@ func TestCLI_Install_RegistersJobCacheSaves(t *testing.T) {
 		"GOPATH":   "",
 		"BASH_ENV": filepath.Join(t.TempDir(), "bash_env"),
 	}
+	args := []string{"--detect-only", "--api-url", ts.URL, "--checksum", "checksum-a"}
 
-	out, err := run(t, env, "install", "--detect-only", "--api-url", ts.URL, "--checksum", "checksum-a")
-	assert.NilError(t, err, "install failed:\n%s", out)
+	out, err := run(t, env, args...)
+	assert.NilError(t, err, "first run failed:\n%s", out)
 
 	// Both registered, neither saved yet.
 	assert.Equal(t, len(s.Cache.PendingCacheSaves()), 2)
@@ -96,20 +42,40 @@ func TestCLI_Install_RegistersJobCacheSaves(t *testing.T) {
 	assert.NilError(t, os.RemoveAll(goCache))
 	assert.NilError(t, os.RemoveAll(modCache))
 
-	out, err = run(t, env, "cache", "load", "--build", "--go-mod", "--checksum", "checksum-a")
-	assert.NilError(t, err, "load failed:\n%s", out)
+	out, err = run(t, env, args...)
+	assert.NilError(t, err, "second run failed:\n%s", out)
 
 	got, err := os.ReadFile(filepath.Join(goCache, "marker")) //nolint:gosec
-	assert.NilError(t, err, "expected the build cache saved by install")
+	assert.NilError(t, err, "expected the build cache to be restored")
 	assert.Equal(t, string(got), "build")
 
 	got, err = os.ReadFile(filepath.Join(modCache, "marker")) //nolint:gosec
-	assert.NilError(t, err, "expected the module cache saved by install")
+	assert.NilError(t, err, "expected the module cache to be restored")
 	assert.Equal(t, string(got), "mod")
 }
 
-// stubGoCachesBinDir is stubGoEnvPATH with the stub in a bin/ subdirectory and
-// a `go version` answer, so `install --detect-only` can resolve a GOROOT.
+// TestCLI_CacheDisabled_RegistersNothing verifies --cache=false is a master
+// switch: no cache is touched even though the per-cache flags default on.
+func TestCLI_CacheDisabled_RegistersNothing(t *testing.T) {
+	s, run := sandbox(t)
+	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
+
+	env := map[string]string{
+		"PATH":     stubGoCachesBinDir(t, t.TempDir(), t.TempDir()),
+		"GOPATH":   "",
+		"BASH_ENV": filepath.Join(t.TempDir(), "bash_env"),
+	}
+
+	out, err := run(t, env, "--detect-only", "--api-url", ts.URL, "--cache=false")
+	assert.NilError(t, err, "run failed:\n%s", out)
+
+	assert.Equal(t, len(s.Cache.PendingCacheSaves()), 0)
+	assert.Equal(t, len(s.Cache.SavedKeys()), 0)
+}
+
+// stubGoCachesBinDir writes a `go` stub in a bin/ subdirectory that answers
+// `go env` with the given cache dirs and a `go version`, so --detect-only can
+// resolve a GOROOT.
 func stubGoCachesBinDir(t *testing.T, goCache, modCache string) string {
 	t.Helper()
 	binDir := filepath.Join(t.TempDir(), "bin")

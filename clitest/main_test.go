@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/circleci-functions/toolkit/sdk/sdktest"
@@ -77,16 +76,4 @@ func sandboxEnv(s *sdktest.Sandbox, extra map[string]string) map[string]string {
 	env["GOROOT"] = ""
 	maps.Copy(env, extra)
 	return env
-}
-
-// fixtureDir resolves the checked-in test project to an absolute path. The
-// binary runs with its own temp dir as cwd, so a relative path would resolve
-// against the wrong directory.
-func fixtureDir(t *testing.T) string {
-	t.Helper()
-	abs, err := filepath.Abs(filepath.Join("..", "internal", "testing", "testproject"))
-	if err != nil {
-		t.Fatalf("resolve fixture dir: %v", err)
-	}
-	return abs
 }
