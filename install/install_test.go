@@ -289,10 +289,9 @@ func TestEnsureCached_CacheErrorIsNonFatal(t *testing.T) {
 	}
 }
 
-// TestEnsureCached_GoCacheChecksumPartitionsCache verifies that different
-// --toolchain-checksum values produce distinct cache keys: a restore only hits
-// when the checksum matches the entry that was saved.
-func TestEnsureCached_GoCacheChecksumPartitionsCache(t *testing.T) {
+// TestEnsureCached_NoCache_SkipsCacheCalls verifies that --cache=false keeps
+// the toolchain out of the job cache, not just the module and build caches.
+func TestEnsureCached_NoCache_SkipsCacheCalls(t *testing.T) {
 	const version = "go1.22.3"
 	goBinScript := fmt.Sprintf(
 		"#!/bin/sh\ncase \"$1\" in\n"+
@@ -326,35 +325,12 @@ func TestEnsureCached_GoCacheChecksumPartitionsCache(t *testing.T) {
 	}
 
 	srv := sdktest.NewServer(t)
-	installDir := t.TempDir()
-	binDir := t.TempDir()
-	ctx := context.Background()
-
-	_, err := install.EnsureCached(ctx, srv.Client(), v, install.EnsureCachedOptions{
-		InstallDir:      installDir,
-		GoCacheChecksum: "checksum-a",
-		BinDir:          binDir,
+	_, err := install.EnsureCached(context.Background(), srv.Client(), v, install.EnsureCachedOptions{
+		InstallDir: t.TempDir(),
+		BinDir:     t.TempDir(),
+		NoCache:    true,
 	})
 	assert.NilError(t, err)
 	assert.Equal(t, int(downloadCount.Load()), 1)
-
-	assert.NilError(t, os.RemoveAll(installDir))
-
-	_, err = install.EnsureCached(ctx, srv.Client(), v, install.EnsureCachedOptions{
-		InstallDir:      installDir,
-		GoCacheChecksum: "checksum-a",
-		BinDir:          binDir,
-	})
-	assert.NilError(t, err)
-	assert.Equal(t, int(downloadCount.Load()), 1, "same checksum must restore from cache without re-downloading")
-
-	assert.NilError(t, os.RemoveAll(installDir))
-
-	_, err = install.EnsureCached(ctx, srv.Client(), v, install.EnsureCachedOptions{
-		InstallDir:      installDir,
-		GoCacheChecksum: "checksum-b",
-		BinDir:          binDir,
-	})
-	assert.NilError(t, err)
-	assert.Equal(t, int(downloadCount.Load()), 2, "different checksum must miss cache and download again")
+	assert.Equal(t, len(srv.SavedKeys()), 0, "no cache should be saved with NoCache set")
 }

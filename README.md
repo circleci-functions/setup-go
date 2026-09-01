@@ -1,271 +1,84 @@
 # setup-go
 
-Install a Go toolchain and prepend it to `PATH` via `$BASH_ENV` so subsequent
-job steps pick it up automatically, run `go test`, and manage tool caches
-(e.g. golangci-lint's) around separate steps.
-
-## install
-
-### What it does
-
-1. Resolves a Go version spec (`stable`, `latest`, `1.22`, `1.22.3`) against the
-   [go.dev release API](https://go.dev/dl/?mode=json&include=all).
-2. Downloads the official tarball for the current OS/arch (unless already present
-   under `--install-dir`), verifies its SHA-256 checksum, and extracts it.
-3. Runs `go env GOPATH` on the installed (or detected) binary to discover the
-   effective `GOPATH` — no hardcoded default.
-4. Appends an `export PATH=...` statement to `$BASH_ENV` (and mirrors it to
-   stdout when `$BASH_ENV` is set) that prepends the toolchain's `bin`
-   directory and `GOPATH`'s `bin` directory.
-5. On Alpine Linux (which ships no C compiler by default), installs `gcc` and
-   `musl-dev` via `apk` so `CGO_ENABLED=1` builds work. This is a no-op on
-   any other platform. Failures (e.g. `apk add` failing, or failing to determine
-   the current Linux distro) are silent and never fail the go installation.
-6. Restores the go module and build caches, and registers their saves to run at
-   the end of the job.
+Installs a Go toolchain, puts it on `PATH` for the rest of the job, and caches
+what your build downloads and compiles.
 
 ```yaml
 steps:
   - run:
       name: Set up Go
-      command: circleci run setup-go@<version> -- install --version 1.22 --checksum '{{ checksum "go.sum" }}'
+      command: circleci run setup-go@<version> -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
+  - run: go build ./...
   - run: go test ./...
 ```
 
-### Flags
+Later steps pick up `go` automatically — there is nothing to source or export
+yourself.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--version` | `stable` | Version spec: `stable`, `latest`, `1.22`, `1.22.3` |
-| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the Go version from its `go` directive. Overrides `--version` when set. |
-| `--detect-only` | false | Use the `go` already on `PATH`; skip download and install |
-| `--install-dir` | `~/.cache/setup-go` | Base directory for extracted toolchains |
-| `--toolchain-checksum` | (empty) | Optional checksum to partition the toolchain cache; different checksums force a re-download even for the same Go version |
-| `--go-mod` | true | Restore the go module cache (`GOMODCACHE`) and save it at the end of the job |
-| `--build` | true | Restore the go build cache (`GOCACHE`) and save it at the end of the job |
-| `--golangci-lint` | false | Restore golangci-lint's cache and save it at the end of the job |
-| `--key` | (empty) | Optional cache key component to partition the job caches |
-| `--checksum` | (empty) | Optional checksum to partition the job caches; different checksums force a cache miss |
+## Choosing a version
 
-Version spec semantics:
+`--version` takes a spec, not just an exact release:
 
 | Spec | Resolves to |
 |------|-------------|
 | `stable` (default) | Newest stable release |
 | `latest` | Newest release, including unstable |
-| `1.22` | Newest stable `go1.22.x` |
-| `1.22.3` | Exact `go1.22.3` |
+| `1.24` | Newest stable `go1.24.x` |
+| `1.24.3` | Exact `go1.24.3` |
 
-### Caching
-
-Toolchains are stored at `<install-dir>/<version>/` (e.g.
-`~/.cache/setup-go/go1.22.3/`). On re-run, if that directory already contains a
-`go` binary whose `go version` output matches the resolved release, the download
-is skipped.
-
-When running inside a CircleCI job, `setup-go install` also uses the job cache to
-persist the toolchain directory across executors. On the first run it saves the
-installed toolchain to cache; on subsequent runs it restores from cache before
-checking the local filesystem, so the download is skipped even on a fresh
-executor. Cache errors (e.g. running outside a job) are non-fatal and fall back
-to a normal install.
-
-`install` also warms the caches the rest of the job needs. It restores the go
-module and build caches up front and saves them once the job's steps are done,
-so nothing between needs a cache step of its own, and a job that fails, is
-cancelled or times out still keeps what it downloaded and compiled. Pass
-`--checksum` to partition those caches, `--go-mod=false` or `--build=false` to
-opt out, and `--golangci-lint` to include the lint cache.
-
-## test
-
-### What it does
-
-Runs `go test ./...` (or `gotestsum -- ./...`) against `--project-path`.
+To keep the toolchain in step with your module, point at the file that already
+declares it:
 
 ```yaml
-steps:
-  - run:
-      name: Set up Go
-      command: circleci run setup-go@<version> -- install --version 1.22
-  - run:
-      name: Test
-      command: circleci run setup-go@<version> -- test --project-path .
+- run: circleci run setup-go@<version> -- --version-file go.mod
 ```
 
-### Flags
+## Caching
+
+Caching is on by default. setup-go restores the Go module cache and build cache
+before your steps run, and saves them once the job is done — so nothing in
+between needs a cache step of its own, and a job that fails, is cancelled or
+times out still keeps what it downloaded and compiled.
+
+Pass `--checksum` so the caches refresh when your dependencies change:
+
+```yaml
+- run: circleci run setup-go@<version> -- --checksum '{{ checksum "go.sum" }}'
+```
+
+Add `--golangci-lint-cache` if the job also runs golangci-lint:
+
+```yaml
+- run: circleci run setup-go@<version> -- --golangci-lint-cache --checksum '{{ checksum "go.sum" }}'
+```
+
+Turn a single cache off with `--build-cache=false`, or all of them with
+`--cache=false`. Cache problems never fail the job.
+
+The installed toolchain is cached too, so a fresh executor usually skips the
+download entirely.
+
+## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--project-path` | `$HOME` | Directory containing your Go project files (`go.mod`, `main.go`, etc). |
-| `--race` | false | Run tests with `-race`. Go's own default already switches `-covermode` to `atomic` when `-race` is set. |
-| `--covermode` | (go default) | Coverage mode: `set`, `count`, or `atomic` |
-| `--failfast` | false | Stop after the first test failure |
-| `--count` | (go default) | Run each test, benchmark, and fuzz seed N times. `1` disables test caching. |
-| `--use-gotestsum` | false | Run via `gotestsum` instead of `go test`. Requires `gotestsum` on `PATH`. |
-| `--cache` | true | Restore the go build cache before the run, and save it at the end of the job. Set to `false` to skip. |
-| `--cache-key` | (empty) | Optional cache key component to partition cache entries. |
-| `--checksum` | (empty) | Optional checksum to partition the cache entry. |
-| `--cache-path` | (empty) | Override the go build cache directory (`GOCACHE`) to save/restore, instead of detecting it via `go env`. Must not be set to an empty string. |
-
-The save is registered before the tests run and happens at the end of the job,
-so the cache survives a run that fails, is cancelled or times out — the
-packages it did compile are still worth keeping for a re-run. It uses the same
-key as `cache save --build` (below), so a later job's `cache load --build` step
-picks up what a `test` run saved when `--cache-key`/`--checksum` match. A `cache
-load --build` in the same job as the `test` run will not see it, since the save
-has not happened yet.
-
-## cache
-
-### What it does
-
-`cache load` and `cache save` restore/save a cache directory to/from the
-CircleCI job cache, for use around a separate step that runs the tool itself.
-Supported targets: golangci-lint's cache directory
-(`~/.cache/golangci-lint`, `--golangci-lint`), the go build cache
-(`go env GOCACHE`, `--build`) and the go module cache
-(`go env GOMODCACHE`, `--go-mod`).
-
-```yaml
-steps:
-  - run:
-      name: Restore golangci-lint cache
-      command: circleci run setup-go@<version> -- cache load --golangci-lint --checksum '{{ checksum "go.sum" }}'
-  - run:
-      name: Lint
-      command: golangci-lint run
-  - run:
-      name: Save golangci-lint cache
-      command: circleci run setup-go@<version> -- cache save --golangci-lint --checksum '{{ checksum "go.sum" }}'
-```
-
-Targets can be combined in a single call:
-
-```yaml
-steps:
-  - run:
-      name: Restore caches
-      command: circleci run setup-go@<version> -- cache load --build --go-mod --checksum '{{ checksum "go.sum" }}'
-  - run: go build ./...
-  - run:
-      name: Save caches
-      command: circleci run setup-go@<version> -- cache save --build --go-mod --checksum '{{ checksum "go.sum" }}'
-```
-
-### Flags
-
-`cache load` and `cache save` take the same flags:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--golangci-lint` | false | Select golangci-lint's cache directory as a target. |
-| `--build` | false | Select the go build cache (`GOCACHE`) as a target. |
-| `--go-mod` | false | Select the go module cache (`GOMODCACHE`) as a target. |
-| `--key` | (empty) | Optional cache key component to partition cache entries. |
-| `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
-| `--build-path` | (empty) | `cache save` only: override the directory saved for `--build`, instead of detecting it via `go env`. Must not be set to an empty string. |
-
-At least one target is required — `cache load`/`cache save` error if none is given.
-
-The cache keys mirror the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s:
-
-| Target | Key |
-|--------|-----|
-| `--golangci-lint` | `v1-<key>-golangci-lint-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
-| `--build` | `v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<checksum>-<72h-rotating epoch>` |
-| `--go-mod` | `v1-<key>-go-mod-<arch>-<checksum>` |
-
-The build cache directory comes from `go env GOCACHE` rather than a hardcoded
-`~/.cache/go-build`, so it is also correct on darwin
-(`~/Library/Caches/go-build`). Cache errors (e.g. running outside a job) are
-non-fatal.
-
-`--build` saves under the exact key above, but restores try three keys in order
-so a near miss still warm-starts the build instead of compiling from cold:
-
-1. the exact key — same dependencies, same rotation window
-2. `…-<checksum>-` — same dependencies, any window, bridging a rotation boundary
-3. `…-<arch>-` — any dependencies, so a `go.sum` bump only recompiles the
-   modules that actually changed
-
-Restoring an older build cache is safe: `GOCACHE` is content-addressed, so
-entries that no longer apply are simply never read.
-
-## mod-download
-
-### What it does
-
-Runs `go mod download` in the current directory, restoring the go module cache
-(`GOMODCACHE`) before it and saving it at the end of the job, so downloaded
-modules persist across job executors.
-
-1. Unless `--cache=false`, restores the go module cache from the CircleCI job
-   cache.
-2. Runs `go mod download`.
-3. Unless `--cache=false`, saves `GOMODCACHE` (detected via `go env`, or
-   `--path` when given) back to the CircleCI job cache.
-
-```yaml
-steps:
-  - run:
-      name: Set up Go
-      command: circleci run setup-go@<version> -- install --version 1.22
-  - run:
-      name: Download modules
-      command: circleci run setup-go@<version> -- mod-download --checksum '{{ checksum "go.sum" }}'
-```
-
-### Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--cache` | true | Restore the go module cache before the download, and save it at the end of the job. Set to `false` to skip. |
-| `--cache-key` | (empty) | Optional cache key component to partition cache entries. |
-| `--checksum` | (empty) | Optional checksum to partition the cache entry; different checksums force a cache miss. |
-| `--path` | (empty) | Override the go module cache directory (`GOMODCACHE`) to save/restore, instead of detecting it via `go env`. Must not be set to an empty string. |
-
-The cache key mirrors the [`circleci/go` orb](https://circleci.com/developer/orbs/orb/circleci/go)'s
-go-mod cache key: `v1-<cache-key>-go-mod-<arch>-<checksum>`. Cache errors (e.g.
-running outside a job) are non-fatal; a `go mod download` failure is fatal.
+| `--version` | `stable` | Version spec: `stable`, `latest`, `1.24`, `1.24.3` |
+| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the version from its `go` directive. Overrides `--version`. |
+| `--detect-only` | false | Use the `go` already on `PATH` instead of installing one |
+| `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
+| `--cache` | true | Set to `false` to disable all caching |
+| `--go-mod-cache` | true | Cache the Go module cache (`GOMODCACHE`) |
+| `--build-cache` | true | Cache the Go build cache (`GOCACHE`) |
+| `--golangci-lint-cache` | false | Cache golangci-lint's cache directory |
+| `--key` | (empty) | Cache key component, for keeping caches separate — e.g. per module in a monorepo |
+| `--checksum` | (empty) | Refresh the caches when this changes — usually `{{ checksum "go.sum" }}` |
 
 ## Platform support
 
-Linux and darwin (amd64 and arm64). The official linux tarball is statically
-linked and runs on Alpine (musl) without modification. Windows install is
-deferred.
+Linux, macOS and Windows, on amd64 and arm64.
 
-## Tests
+On Linux it runs on Alpine (musl) without modification, and installs `gcc` and
+`musl-dev` there so `CGO_ENABLED=1` builds work.
 
-Three layers, each in the cheapest place that can hold it.
-
-**Unit** — `{goversion,install,jobenv,cache,goenv}/` call the exported API
-directly: `install`/`goversion`/`jobenv` via a fake go.dev server
-(`internal/testing/fakegodev`), `cache` via a fake CircleCI plugin server
-(`toolkit/sdk/sdktest`), `goenv` against the real `go` binary.
-
-**CLI** — `clitest/` compiles the real binary and runs it as a subprocess to
-cover the whole flag surface and its error paths: every subcommand, unknown
-flags, exit codes, and cache round-trips against the fake plugin server. Each
-test runs in a `toolkit/testing/functest` sandbox, so `$HOME`, `$BASH_ENV`, the
-install dir and the symlink dir are all temp locations.
-
-Both layers are hermetic and need no network. Run with `task test`.
-
-**Acceptance** — `acceptance/`, behind a `//go:build acceptance` tag so it stays
-out of `task test`/`task ci`. Same sandboxing, but against real infrastructure:
-a real go.dev download, and a real CircleCI task-agent when running inside a job
-(`functest.WithRealAgent` falls back to the fake elsewhere, so the suite still
-runs on a laptop). Run with `task acceptance`; it needs network access but will
-not touch your real home directory, `/usr/local/bin`, or a shared cache key.
-
-Cache round-trips use a per-run checksum (`sdk.RunID`). CircleCI cache keys are
-write-once, so a constant checksum would make the second run in a rotation
-window restore the first run's data instead of its own.
-
-In CI, `acceptance` runs on the Go executor — it installs into temp dirs and
-asserts the toolchain it put on `PATH` is the one it installed, so a preinstalled
-Go can't produce a false pass. A separate two-step `bare-smoke` job covers the
-one property that genuinely needs an image without Go: the cross-compiled
-artifact `publish` is about to ship bootstraps a toolchain from nothing and
-leaves it on `PATH` for later steps.
+On Windows the `PATH` export is written for a bash shell, so later steps need
+Git Bash or MSYS2 to pick the toolchain up.
