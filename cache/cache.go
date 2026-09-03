@@ -10,9 +10,12 @@ import (
 	"github.com/circleci-functions/toolkit/sdk"
 )
 
-// cacheRotation is how often the lint and build cache keys rotate, forcing a
-// fresh cache even with no other change. Matches the circleci/go orb's
+// cacheRotation is how often the cache keys rotate, forcing a fresh cache even
+// with no other change. Matches the circleci/go orb's
 // {{ epoch | round "72h" }} cache key component.
+//
+// For the build cache this is the only mechanism that ever reclaims space, so
+// buildRestoreKeys is careful never to reach across a window. See its comment.
 const cacheRotation = 72 * time.Hour
 
 // Saver saves paths under a cache key. Both *sdk.Client and the *sdk.Teardown
@@ -60,15 +63,7 @@ func SaveLintCache(ctx context.Context, saver Saver, key, checksum string) {
 //
 //	v1-<< parameters.key >>-golangci-lint-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
 func lintCacheKey(key, checksum string) string {
-	return rotatingCacheKey("golangci-lint", key, checksum)
-}
-
-// rotatingCacheKey builds a job- and arch-scoped cache key that rotates every
-// cacheRotation, mirroring the circleci/go orb's key layout:
-//
-//	v1-<key>-<tool>-<CIRCLE_JOB>-<arch>-<checksum>-<rotating epoch>
-func rotatingCacheKey(tool, key, checksum string) string {
-	return fmt.Sprintf("%s-%s-%d", cacheKeyBase(tool, key), checksum, rotationEpoch())
+	return fmt.Sprintf("%s-%s-%d", cacheKeyBase("golangci-lint", key), checksum, rotationEpoch())
 }
 
 // cacheKeyBase is the job- and arch-scoped prefix a tool's cache keys share:
@@ -109,8 +104,8 @@ func goModCacheKey(key, checksum string) string {
 }
 
 // RestoreBuildCache restores the go build cache (GOCACHE), trying the ordered
-// fallback keys from buildRestoreKeys so a rotation boundary or a dependency
-// bump warm-starts from a near miss instead of compiling from cold.
+// fallback keys from buildRestoreKeys so a dependency bump warm-starts from a
+// near miss instead of compiling from cold.
 func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
 	_, err := client.RestoreCache(ctx, buildRestoreKeys(key, checksum),
 		sdk.WithStepName("Restoring go build cache"))
@@ -123,29 +118,51 @@ func SaveBuildCache(ctx context.Context, saver Saver, key, checksum, dir string)
 	sdk.LogCacheErr("save go build", err)
 }
 
-// buildCacheKey mirrors the circleci/go orb's cache key:
+// buildCacheKey is the key a build saves under. It carries the same components
+// as the circleci/go orb's go-build key, but with the rotation epoch ahead of
+// the checksum rather than after it:
 //
-//	v1-<< parameters.key >>-go-build-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+//	v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<rotating epoch>-<checksum>
+//
+// The order matters because prefix matching can only drop trailing components.
+// With the epoch last, a key broad enough to match any checksum is also broad
+// enough to match any window, which buildRestoreKeys must not allow.
 func buildCacheKey(key, checksum string) string {
-	return rotatingCacheKey("go-build", key, checksum)
+	return buildWindowPrefix(key) + checksum
+}
+
+// buildWindowPrefix matches every build cache key saved in the current
+// rotation window: v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<epoch>-. The epoch
+// is a fixed-width unix timestamp and the prefix ends on the separator that
+// follows it, so it cannot match a neighbouring window's keys.
+func buildWindowPrefix(key string) string {
+	return fmt.Sprintf("%s-%d-", cacheKeyBase("go-build", key), rotationEpoch())
 }
 
 // buildRestoreKeys returns the keys a restore tries in order. CircleCI matches
 // each key as a prefix and takes the most recent entry matching the first key
-// that hits at all, so the list broadens as it goes:
+// that hits at all:
 //
 //  1. exact — same deps, same rotation window
-//  2. same deps, any window — bridges a rotation boundary
-//  3. any deps — after a dependency bump only the changed modules recompile
+//  2. same window, any deps — after a dependency bump only the changed
+//     modules recompile
 //
 // Entry 1 is the save key, so an exact round-trip still hits on a cache that
-// only matches exactly. Restoring an older cache is safe: GOCACHE is
-// content-addressed, so entries that no longer apply simply go unused.
+// only matches exactly.
+//
+// Neither entry can reach an earlier window, and that bound is what keeps the
+// cache from growing without limit. A restore lands its entry on disk and the
+// teardown save writes the whole directory back, so a tier that matched an
+// earlier window would carry that window's contents forward into the next one,
+// forever. Nothing downstream would reclaim them: GOCACHE self-trims by mtime
+// (cmd/go/internal/cache.Trim drops entries unused for five days), but a
+// restored file's mtime is its restore time rather than its original one, so
+// no entry in a restored cache ever looks old enough to collect. Rotation is
+// the only thing that shrinks this cache, and it only works if prefix
+// matching stops at the window.
 func buildRestoreKeys(key, checksum string) []string {
-	base := cacheKeyBase("go-build", key)
 	return []string{
 		buildCacheKey(key, checksum),
-		fmt.Sprintf("%s-%s-", base, checksum),
-		base + "-",
+		buildWindowPrefix(key),
 	}
 }
