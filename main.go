@@ -18,9 +18,9 @@ import (
 	"github.com/circleci-functions/setup-go/cache"
 	"github.com/circleci-functions/setup-go/cgoalpine"
 	"github.com/circleci-functions/setup-go/goenv"
+	"github.com/circleci-functions/setup-go/goroot"
 	"github.com/circleci-functions/setup-go/goversion"
 	"github.com/circleci-functions/setup-go/install"
-	"github.com/circleci-functions/setup-go/pathlink"
 )
 
 type cli struct {
@@ -56,7 +56,7 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 	}
 	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", spec, ver.Name)
 
-	goroot, err := install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
+	gorootDir, err := install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
 		InstallDir: expandHome(c.InstallDir),
 		DetectOnly: c.DetectOnly,
 		NoCache:    !c.Cache,
@@ -66,16 +66,16 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 		return err
 	}
 
-	// The toolchain just installed: until pathlink runs, `go` still resolves to
+	// The toolchain just installed: until it is linked, `go` still resolves to
 	// whatever the image shipped.
-	goBinary := filepath.Join(goroot, "bin", install.GoBinary())
+	goBinary := filepath.Join(gorootDir, "bin", install.GoBinary())
 	env, err := goenv.LoadFrom(ctx, goBinary)
 	if err != nil {
 		return err
 	}
 
-	linked, err := pathlink.Ensure(pathlink.Options{
-		GoRoot: goroot,
+	linked, err := goroot.Link(goroot.Options{
+		GoRoot: gorootDir,
 		GoPath: env.GOPATH,
 		BinDir: c.BinDir,
 	})
