@@ -11,12 +11,19 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/circleci-functions/toolkit/sdk/sdktest"
 	"github.com/circleci-functions/toolkit/testing/compiler"
 	"github.com/circleci-functions/toolkit/testing/runner"
 )
+
+// binaryPathEnvVar names a prebuilt setup-go to test, for an executor with no
+// Go toolchain to compile one with. The smoke jobs set it, and pair it with a
+// cross-compiled copy of this suite. A relative path is resolved here, since
+// the suite runs the binary from a working directory of its own.
+const binaryPathEnvVar = "SETUP_GO_BINARY"
 
 var binaryPath string
 
@@ -30,6 +37,18 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) (int, error) {
+	if bin := os.Getenv(binaryPathEnvVar); bin != "" {
+		abs, err := filepath.Abs(bin)
+		if err != nil {
+			return 0, fmt.Errorf("%s=%q: %w", binaryPathEnvVar, bin, err)
+		}
+		if _, err := os.Stat(abs); err != nil {
+			return 0, fmt.Errorf("%s=%q: %w", binaryPathEnvVar, bin, err)
+		}
+		binaryPath = abs
+		return m.Run(), nil
+	}
+
 	p := compiler.NewParallel(1)
 	defer p.Cleanup()
 

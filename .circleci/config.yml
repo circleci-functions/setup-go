@@ -18,6 +18,60 @@ executors:
   base:
     docker:
       - image: cimg/base:stable
+  # For the smoke jobs: a VM with a root-owned preinstalled toolchain, and the
+  # two platforms where PATH and linking differ from Linux.
+  machine:
+    machine:
+      image: ubuntu-2404:current
+  macos:
+    macos:
+      xcode: "16.4.0"
+  windows:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: bash.exe -eo pipefail
+    resource_class: windows.medium
+
+commands:
+  smoke:
+    description: >-
+      Let setup-go pick where the toolchain goes on this executor's real PATH,
+      then resolve `go` by name in a process that sourced nothing.
+
+      Everything runs from the workspace, so the executor needs no Go, no
+      modules and no checkout: the suite is a cross-compiled test binary, and
+      test2json and gotestsum turn its output into the JUnit CircleCI collects.
+      gotestsum warns that it cannot find `go` to record a version with; that
+      is the point, and harmless.
+    parameters:
+      platform:
+        type: string
+        description: The os/arch whose artifacts to run, e.g. linux/amd64.
+      ext:
+        type: string
+        default: ""
+        description: Executable suffix for the platform.
+    steps:
+      - run:
+          name: Link the toolchain onto PATH and resolve it afterwards
+          command: |
+            mkdir -p test-results
+            # standard-verbose keeps the suite's own output in the log: which
+            # directory setup-go chose is the thing worth reading even when the
+            # check passes.
+            ./dist/tools/<< parameters.platform >>/gotestsum<< parameters.ext >> \
+              --junitfile test-results/smoke.xml \
+              --format standard-verbose \
+              --raw-command -- \
+              ./dist/tools/<< parameters.platform >>/test2json<< parameters.ext >> \
+                -p acceptance \
+                ./dist/acceptance/<< parameters.platform >>/acceptance<< parameters.ext >> \
+                -test.v=test2json -test.run TestAcceptance_LinksOntoTheRealPath
+          environment:
+            SETUP_GO_BINARY: ./dist/setup-go/<< parameters.platform >>/setup-go<< parameters.ext >>
+            SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
+      - store_test_results:
+          path: test-results
 
 jobs:
   test:
@@ -31,6 +85,8 @@ jobs:
             - setup-go-go-
       - run: task lint
       - run: task test
+      - store_test_results:
+          path: test-results
       - save_cache:
           key: setup-go-go-{{ checksum "go.sum" }}-{{ epoch }}
           paths:
@@ -49,6 +105,10 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task dry-run
+      # The suite as a binary, plus the tools to report it, so an executor with
+      # no Go can run and record it.
+      - run: task build-acceptance
+      - run: task build-tools
       - persist_to_workspace:
           root: .
           paths:
@@ -75,19 +135,51 @@ jobs:
             # round-trips here exercise the real thing. The suite fails rather
             # than falling back if it can't reach it.
             TOOLKIT_CACHE_MODE: live
+      - store_test_results:
+          path: test-results
 
-  # The one property that needs an image without Go: the shipped artifact
-  # bootstraps a toolchain from nothing and leaves it on PATH for later steps.
+  # Each of these runs the packaged suite against the packaged artifact, so the
+  # executor needs no Go, no modules and no checkout. `task smoke-local`
+  # reproduces the Linux ones in a container.
+  #
+  # cimg/base is the only image here with no Go at all, so it also proves
+  # setup-go bootstraps from nothing.
+  #
+  # All of these run on every push for now. The VM, macOS and Windows ones are
+  # the expensive executors, and publish already requires them, so they can move
+  # to the release path once the linking they cover stops changing.
   bare-smoke:
     executor: base
     steps:
-      - checkout
       - attach_workspace:
           at: .
-      - run:
-          name: Install Go from nothing
-          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
-      - run: go version
+      - smoke:
+          platform: linux/amd64
+
+  smoke-machine:
+    executor: machine
+    steps:
+      - attach_workspace:
+          at: .
+      - smoke:
+          platform: linux/amd64
+
+  smoke-macos:
+    executor: macos
+    steps:
+      - attach_workspace:
+          at: .
+      - smoke:
+          platform: darwin/arm64
+
+  smoke-windows:
+    executor: windows
+    steps:
+      - attach_workspace:
+          at: .
+      - smoke:
+          platform: windows/amd64
+          ext: ".exe"
 
   publish:
     executor: go
@@ -132,8 +224,29 @@ workflows:
           filters:
             tags:
               only: /.*/
+      - smoke-machine:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-macos:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-windows:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
       - publish:
-          requires: [test, acceptance, bare-smoke]
+          requires:
+            - test
+            - acceptance
+            - bare-smoke
+            - smoke-machine
+            - smoke-macos
+            - smoke-windows
           context: [functions-publisher, github-readonly]
           filters:
             tags:

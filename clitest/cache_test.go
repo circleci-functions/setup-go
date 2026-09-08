@@ -86,7 +86,7 @@ case "$1 $2" in
   *)
     case "$1" in
       version) echo 'go version go1.22.3' ;;
-      env) shift; for v in "$@"; do case "$v" in GOPATH) echo /fake/go ;; *) echo "" ;; esac; done ;;
+      env) shift; for v in "$@"; do case "$v" in GOPATH) echo /fake/go ;; GOROOT) echo "$(cd "${0%%/*}/.." && pwd)" ;; *) echo "" ;; esac; done ;;
       *) exit 1 ;;
     esac ;;
 esac

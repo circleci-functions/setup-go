@@ -12,8 +12,24 @@ steps:
   - run: go test ./...
 ```
 
-Later steps pick up `go` automatically — there is nothing to source or export
-yourself.
+Later steps pick up `go` automatically, in whatever shell they run — there is
+nothing to source or export yourself.
+
+## How it gets onto PATH
+
+A step inherits its environment from the job, not from the step before it, so
+setup-go cannot just prepend to `PATH`. It links `go` and `gofmt` into a
+directory `PATH` already holds, which reaches every later process whatever
+shell it runs in.
+
+The directory is chosen by preference — `$GOPATH/bin`, `~/.local/bin`,
+`~/bin`, `/usr/local/bin` — and if none of those is on `PATH` ahead of an
+existing toolchain, that toolchain is taken over instead, so the link never
+lands somewhere another tool owns. setup-go then asks the `go` that `PATH`
+resolves for its `GOROOT`, and fails unless it is the one just installed.
+
+Nothing is written to `$BASH_ENV`. If a job needs the toolchain's location
+rather than just `go`, ask the toolchain: `go env GOROOT`.
 
 ## Choosing a version
 
@@ -80,5 +96,10 @@ Linux, macOS and Windows, on amd64 and arm64.
 On Linux it runs on Alpine (musl) without modification, and installs `gcc` and
 `musl-dev` there so `CGO_ENABLED=1` builds work.
 
-On Windows the `PATH` export is written for a bash shell, so later steps need
-Git Bash or MSYS2 to pick the toolchain up.
+Windows steps pick the toolchain up in any shell — bash, cmd or PowerShell —
+via small forwarding shims rather than symlinks.
+
+Anything `go install` builds is reachable by name too, provided `$GOPATH/bin`
+is on `PATH` or does not exist yet: setup-go points a missing one at a
+directory that is. One that already exists off `PATH` is left alone, and said
+so in the output.

@@ -19,23 +19,32 @@ import (
 	"github.com/circleci-functions/setup-go/internal/testing/fakegodev"
 )
 
-// TestCLI_DetectOnly_ExportsEnv relies on a real `go` binary being present on
-// PATH (needed by --detect-only to run `go env`). This is satisfied in CI
-// (cimg/go image) and on any standard dev machine.
-func TestCLI_DetectOnly_ExportsEnv(t *testing.T) {
+// TestCLI_WritesNoBashEnv pins the contract this function no longer has: it
+// puts the toolchain on PATH by linking it, so nothing is exported to a shell
+// and later steps need no particular shell to pick it up.
+//
+// --detect-only, so a real `go` is not required: the stub answers the `go env`
+// queries, as it does in CI (cimg/go) and on a dev machine.
+func TestCLI_WritesNoBashEnv(t *testing.T) {
 	_, run := sandbox(t)
 	ts := fakegodev.New(t, []fakegodev.Release{fakegodev.PlatformRelease("go1.22.3", "")}, nil)
-	dir := t.TempDir()
-	bashEnvFile := filepath.Join(dir, "bash_env")
+	binDir := stubGoOnlyBinDir(t)
+	bashEnvFile := filepath.Join(t.TempDir(), "bash_env")
 
-	out, err := run(t, map[string]string{"GOPATH": "", "BASH_ENV": bashEnvFile},
+	out, err := run(t, map[string]string{"PATH": binDir, "GOPATH": "", "BASH_ENV": bashEnvFile},
 		"--detect-only", "--api-url", ts.URL)
 	assert.NilError(t, err, "got: %s", out)
 
-	content, readErr := os.ReadFile(bashEnvFile)
-	assert.NilError(t, readErr)
-	assert.Assert(t, strings.Contains(string(content), "export PATH="), "BASH_ENV missing PATH: %s", content)
-	assert.Assert(t, !strings.Contains(string(content), "GOPATH="), "BASH_ENV should not export GOPATH: %s", content)
+	_, statErr := os.Stat(bashEnvFile)
+	assert.Assert(t, os.IsNotExist(statErr), "expected $BASH_ENV to be left untouched, got %v", statErr)
+
+	// The toolchain --detect-only found is already the one on PATH, so it is
+	// reported as-is rather than linked over itself.
+	assert.Assert(t, strings.Contains(out, "resolve from "+binDir), "got: %s", out)
+
+	fi, err := os.Lstat(filepath.Join(binDir, "go"))
+	assert.NilError(t, err)
+	assert.Assert(t, fi.Mode()&os.ModeSymlink == 0, "the go already on PATH must be left in place")
 }
 
 func TestCLI_UnknownFlag(t *testing.T) {
@@ -150,6 +159,7 @@ case "$1" in
         GOMODCACHE) echo "/fake/go/pkg/mod" ;;
         GOCACHE)    echo "/fake/cache/go-build" ;;
         GOPATH)     echo "/fake/go" ;;
+        GOROOT)     echo "$(cd "${0%/*}/.." && pwd)" ;;
         *)          echo "" ;;
       esac
     done
