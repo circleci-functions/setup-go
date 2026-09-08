@@ -135,18 +135,9 @@ jobs:
       - assert-nothing-exported
 
   # Each executor arranges PATH differently; all assert the same thing in a
-  # step after the install.
-  smoke-preinstalled:
-    executor: go
-    steps:
-      - attach_workspace:
-          at: .
-      - run:
-          name: Install Go over the one the image ships
-          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
-      - assert-installed-go-resolves
-      - assert-nothing-exported
-
+  # step after the install. These run on release tags rather than every push:
+  # they are the expensive executors, and `acceptance` covers discovery against
+  # a real PATH on every push.
   smoke-machine:
     executor: machine
     steps:
@@ -233,28 +224,35 @@ workflows:
           filters:
             tags:
               only: /.*/
-      - smoke-preinstalled:
-          requires: [build]
-          filters:
-            tags:
-              only: /.*/
       - smoke-machine:
           requires: [build]
           filters:
             tags:
-              only: /.*/
+              only: /^v\d+\.\d+\.\d+$/
+            branches:
+              ignore: /.*/
       - smoke-macos:
           requires: [build]
           filters:
             tags:
-              only: /.*/
+              only: /^v\d+\.\d+\.\d+$/
+            branches:
+              ignore: /.*/
       - smoke-windows:
           requires: [build]
           filters:
             tags:
-              only: /.*/
+              only: /^v\d+\.\d+\.\d+$/
+            branches:
+              ignore: /.*/
       - publish:
-          requires: [test, acceptance, bare-smoke]
+          requires:
+            - test
+            - acceptance
+            - bare-smoke
+            - smoke-machine
+            - smoke-macos
+            - smoke-windows
           context: [functions-publisher, github-readonly]
           filters:
             tags:
