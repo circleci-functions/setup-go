@@ -84,6 +84,9 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task lint
+      # A release is the only thing that runs `task publish`, so a missing task
+      # would otherwise surface at release time.
+      - run: task lint-tasks
       - run: task test
       - store_test_results:
           path: test-results

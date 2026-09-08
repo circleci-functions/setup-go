@@ -31,6 +31,21 @@ tasks:
     cmds:
       - go mod tidy
 
+  lint-tasks:
+    desc: Check every task the CI config invokes exists
+    cmds:
+      - |
+        set -eu
+        missing=""
+        for t in $(grep -v '^[[:space:]]*#' .circleci/config.yml \
+                   | grep -oE 'task [a-z][a-z-]*' | awk '{print $2}' | sort -u); do
+          task --list-all 2>/dev/null | grep -q "^\* $t:" || missing="$missing $t"
+        done
+        if [ -n "$missing" ]; then
+          echo "CI config invokes tasks that do not exist:$missing" >&2
+          exit 1
+        fi
+
   lint-mod:
     desc: Check go.mod / go.sum are tidy
     deps: [tidy]
@@ -107,3 +122,18 @@ tasks:
                 -test.v=test2json -test.run TestAcceptance_LinksOntoTheRealPath
             echo "wrote $(wc -l < test-results/smoke.xml) lines of JUnit"
           '
+
+  ci:
+    desc: Run everything CI runs (lint + test + dry-run)
+    cmds:
+      - task: lint
+      - task: lint-tasks
+      - task: test
+      - task: dry-run
+
+  publish:
+    desc: Build and publish setup-go to S3 (VERSION required)
+    requires:
+      vars: [VERSION]
+    cmds:
+      - go tool release --name setup-go --version "{{.VERSION}}"
