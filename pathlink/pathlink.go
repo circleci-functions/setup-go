@@ -18,7 +18,9 @@ import (
 	"strings"
 )
 
-// DefaultBinDir is linked into when PATH offers nowhere writable.
+// DefaultBinDir is the traditional place for a locally installed binary, and
+// the last preference on PATH. Windows has no equivalent, so there it is not
+// offered at all.
 const DefaultBinDir = "/usr/local/bin"
 
 // linked are the toolchain binaries made resolvable by name. GOROOT/bin holds
@@ -79,6 +81,11 @@ func Ensure(opts Options) (Result, error) {
 	}
 
 	dir, elevate := ChooseDir(dirs, IndexOfGo(dirs), PreferredDirs(opts.GoPath), Writable)
+	if dir == "" {
+		return Result{}, fmt.Errorf(
+			"pathlink: no directory on PATH can hold the toolchain (PATH=%s)",
+			strings.Join(dirs, string(os.PathListSeparator)))
+	}
 	if err := linkInto(dir, opts.GoRoot, elevate); err != nil {
 		return Result{}, err
 	}
@@ -144,13 +151,19 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 			return p, false
 		}
 	}
+	// Taking over the `go` already on PATH before falling back to scanning it:
+	// that directory is a toolchain's by definition, where an arbitrary
+	// writable entry belongs to whatever tool put it there.
+	if existing >= 0 {
+		return dirs[existing], !writable(dirs[existing])
+	}
 	for i, d := range dirs {
 		if ahead(i) && !managed(d) && writable(d) {
 			return d, false
 		}
 	}
-	if existing >= 0 {
-		return dirs[existing], !writable(dirs[existing])
+	if runtime.GOOS == "windows" {
+		return "", false
 	}
 	return DefaultBinDir, !writable(DefaultBinDir)
 }
@@ -160,13 +173,30 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 // toolchain already writes there, so nothing else is going to reorganise it.
 func PreferredDirs(goPath string) []string {
 	var dirs []string
-	if goPath != "" {
-		dirs = append(dirs, filepath.Join(goPath, "bin"))
+	if bin := GoPathBin(goPath); bin != "" {
+		dirs = append(dirs, bin)
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		dirs = append(dirs, filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"))
 	}
-	return append(dirs, DefaultBinDir)
+	if runtime.GOOS != "windows" {
+		dirs = append(dirs, DefaultBinDir)
+	}
+	return dirs
+}
+
+// GoPathBin returns the bin directory `go install` writes to, or "".
+//
+// GOPATH is a list, and the machine executor sets two entries. `go install`
+// uses the first, and so does this: joining "bin" onto the whole list would
+// name a directory that is nobody's.
+func GoPathBin(goPath string) string {
+	for _, p := range filepath.SplitList(goPath) {
+		if p != "" {
+			return filepath.Join(p, "bin")
+		}
+	}
+	return ""
 }
 
 // managed reports whether dir belongs to a tool that rewrites its contents.

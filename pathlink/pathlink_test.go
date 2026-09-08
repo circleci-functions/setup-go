@@ -30,17 +30,23 @@ func fakeGoRoot(t *testing.T) string {
 	return root
 }
 
-func TestEnsure_LinksIntoAWritableDirAheadOfTheExistingGo(t *testing.T) {
+// The common case, and what cimg/go does: GOPATH/bin is on PATH ahead of the
+// toolchain the image ships, so the link goes there and the preinstalled
+// toolchain is shadowed rather than disturbed.
+func TestEnsure_ShadowsThePreinstalledGoFromAPreferredDir(t *testing.T) {
 	goroot := fakeGoRoot(t)
-	early, preinstalled := t.TempDir(), t.TempDir()
+	goPath, preinstalled := t.TempDir(), t.TempDir()
+	early := filepath.Join(goPath, "bin")
+	assert.NilError(t, os.MkdirAll(early, 0750))
 	assert.NilError(t, os.WriteFile(filepath.Join(preinstalled, "go"), []byte("#!/bin/sh\n"), 0755))
 
 	got, err := pathlink.Ensure(pathlink.Options{
 		GoRoot: goroot,
+		GoPath: goPath,
 		Path:   strings.Join([]string{early, preinstalled}, string(os.PathListSeparator)),
 	})
 	assert.NilError(t, err)
-	assert.Equal(t, got.Dir, early, "expected the link to go ahead of the preinstalled go")
+	assert.Equal(t, got.Dir, early, "expected the link to go into GOPATH/bin, ahead of the preinstalled go")
 	assert.Assert(t, got.Verified)
 
 	target, err := os.Readlink(filepath.Join(early, "go"))
@@ -50,10 +56,32 @@ func TestEnsure_LinksIntoAWritableDirAheadOfTheExistingGo(t *testing.T) {
 	_, err = os.Stat(filepath.Join(early, "gofmt"))
 	assert.NilError(t, err, "gofmt must be linked alongside go")
 
-	// The preinstalled toolchain is shadowed, not replaced.
 	fi, err := os.Lstat(filepath.Join(preinstalled, "go"))
 	assert.NilError(t, err)
 	assert.Assert(t, fi.Mode()&os.ModeSymlink == 0, "the preinstalled go must be left alone")
+}
+
+// With nothing preferred on PATH, the toolchain already there is taken over.
+// The earlier entry is writable, but a directory PATH holds that is not one of
+// the conventional bin directories belongs to some other tool.
+func TestEnsure_TakesOverThePreinstalledGoWhenNothingIsPreferred(t *testing.T) {
+	goroot := fakeGoRoot(t)
+	unrelated, preinstalled := t.TempDir(), t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(preinstalled, "go"), []byte("#!/bin/sh\n"), 0755))
+
+	got, err := pathlink.Ensure(pathlink.Options{
+		GoRoot: goroot,
+		Path:   strings.Join([]string{unrelated, preinstalled}, string(os.PathListSeparator)),
+	})
+	assert.NilError(t, err)
+	assert.Equal(t, got.Dir, preinstalled)
+
+	target, err := os.Readlink(filepath.Join(preinstalled, "go"))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(goroot, "bin", "go"))
+
+	_, err = os.Stat(filepath.Join(unrelated, "go"))
+	assert.Assert(t, os.IsNotExist(err), "an unrelated directory on PATH must be left alone")
 }
 
 // Verification asks the toolchain PATH resolves where its GOROOT is, rather
@@ -190,17 +218,23 @@ func TestChooseDir(t *testing.T) {
 			wantDir:   "/first",
 		},
 		{
-			name:     "no preference available, so the earliest writable entry ahead of it",
+			name:     "nothing preferred, so take over the existing go even though an earlier entry is writable",
 			existing: 2,
 			writable: writable("/second", "/third"),
-			wantDir:  "/second",
+			wantDir:  "/third",
 		},
 		{
-			name:        "nothing usable ahead of the existing go, so take it over",
+			name:        "taking over a root-owned directory needs elevation",
 			existing:    1,
 			writable:    writable("/third"),
 			wantDir:     "/second",
 			wantElevate: true,
+		},
+		{
+			name:     "no go on PATH at all, so the earliest writable entry",
+			existing: -1,
+			writable: writable("/second", "/third"),
+			wantDir:  "/second",
 		},
 		{
 			name:        "no go on PATH and nothing writable",
@@ -246,6 +280,28 @@ func TestPreferredDirs_PutsGoPathBinFirst(t *testing.T) {
 	got := pathlink.PreferredDirs("/home/u/go")
 	assert.Equal(t, got[0], filepath.Join("/home/u/go", "bin"))
 	assert.Equal(t, got[len(got)-1], pathlink.DefaultBinDir)
+}
+
+// The machine executor sets GOPATH to two entries. `go install` writes to the
+// first; joining "bin" onto the list would name a directory that is nobody's.
+func TestGoPathBin_TakesTheFirstEntryOfAList(t *testing.T) {
+	list := strings.Join([]string{"/home/u/.go_workspace", "/usr/local/go_workspace"},
+		string(os.PathListSeparator))
+
+	assert.Equal(t, pathlink.GoPathBin(list), filepath.Join("/home/u/.go_workspace", "bin"))
+	assert.Equal(t, pathlink.GoPathBin(""), "")
+}
+
+// Linking into a directory that belongs to an unrelated runtime is what the
+// Windows executor did when nothing was preferred: C:\tools\ruby34\bin was
+// simply the first writable entry. Replacing the toolchain already on PATH is
+// both stabler and closer to what was asked for.
+func TestChooseDir_PrefersTakingOverTheExistingGoToAnUnrelatedDir(t *testing.T) {
+	dirs := []string{"/tools/ruby34/bin", "/usr/local/go/bin"}
+	anything := func(string) bool { return true }
+
+	dir, _ := pathlink.ChooseDir(dirs, 1, nil, anything)
+	assert.Equal(t, dir, "/usr/local/go/bin")
 }
 
 func TestWritable(t *testing.T) {

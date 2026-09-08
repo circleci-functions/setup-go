@@ -19,9 +19,15 @@ nothing to source or export yourself.
 
 A step inherits its environment from the job, not from the step before it, so
 setup-go cannot simply prepend to `PATH`. Instead it links `go` and `gofmt`
-into a directory `PATH` already holds, ahead of any toolchain the image ships.
-That reaches every later process, including ones that run under a shell other
-than bash and ones that source nothing at all.
+into a directory `PATH` already holds. That reaches every later process,
+including ones that run under a shell other than bash and ones that source
+nothing at all.
+
+It picks that directory by preference — `$GOPATH/bin`, `~/.local/bin`,
+`~/bin`, `/usr/local/bin` — and takes over whatever `go` is already on `PATH`
+if none of those is there, so the toolchain never lands in a directory that
+belongs to some other tool. Then it asks the `go` that `PATH` resolves where
+its `GOROOT` is, and fails the step unless that is the toolchain it installed.
 
 Nothing is written to `$BASH_ENV`. If a job needs the toolchain's location
 rather than just `go`, ask the toolchain: `go env GOROOT`.

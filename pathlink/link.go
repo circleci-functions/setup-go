@@ -92,7 +92,10 @@ func reportGoPathBin(goPath, linkedDir string, dirs []string, elevated bool) {
 	if goPath == "" {
 		return
 	}
-	bin := filepath.Join(goPath, "bin")
+	bin := GoPathBin(goPath)
+	if bin == "" {
+		return
+	}
 	if onPath(bin, dirs) {
 		return
 	}
