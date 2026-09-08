@@ -24,7 +24,7 @@ tasks:
   acceptance:
     desc: Run acceptance tests against real go.dev (network required; safe to run locally)
     cmds:
-      - go tool gotestsum --junitfile test-results/acceptance.xml -- -tags acceptance -timeout 20m ./acceptance/...
+      - go tool gotestsum --junitfile test-results/acceptance.xml --format standard-verbose -- -tags acceptance -timeout 20m ./acceptance/...
 
   tidy:
     desc: Tidy go.mod / go.sum
@@ -100,6 +100,7 @@ tasks:
             mkdir -p test-results
             ./dist/tools/linux/amd64/gotestsum \
               --junitfile test-results/smoke.xml \
+              --format standard-verbose \
               --raw-command -- \
               ./dist/tools/linux/amd64/test2json -p acceptance \
                 ./dist/acceptance/linux/amd64/acceptance \

@@ -50,9 +50,14 @@ func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 	out := r.StdoutString() + r.StderrString()
 	assert.NilError(t, err, "got: %s", out)
 
+	// Worth reading even when this passes: which directory an executor offered
+	// is the thing that has been wrong before.
+	linked := reportedLinkDir(t, out)
+	t.Logf("setup-go linked the toolchain into %s", linked)
+
 	// The install dir goes away with the sandbox, so the links must too, or a
 	// dangling `go` follows this test into the rest of the job.
-	removeLinks(t, reportedLinkDir(t, out))
+	removeLinks(t, linked)
 
 	t.Run("ResolvesByNameInALaterStep", func(t *testing.T) {
 		got, err := sdktest.LaterStep(t, "go", "version")
@@ -80,10 +85,9 @@ func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 	})
 
 	t.Run("NotIntoADirectoryOwnedByAnotherTool", func(t *testing.T) {
-		dir := reportedLinkDir(t, out)
-		for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+		for _, part := range strings.Split(filepath.ToSlash(linked), "/") {
 			assert.Assert(t, part != "shims",
-				"a version manager rewrites its shims directory, taking the link with it: %s", dir)
+				"a version manager rewrites its shims directory, taking the link with it: %s", linked)
 		}
 	})
 }
