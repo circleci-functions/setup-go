@@ -316,3 +316,47 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, !pathlink.Writable(dir))
 	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child")))
 }
+
+// Taking over a directory replaces the go it holds and leaves no backup
+// behind once the link is in place.
+func TestEnsure_ReplacesTheGoItTakesOver(t *testing.T) {
+	goroot := fakeGoRoot(t)
+	// A directory holding a go, writable enough to be chosen but not to be
+	// written into, so the link fails after the original is moved aside.
+	dir := t.TempDir()
+	original := filepath.Join(dir, "go")
+	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
+
+	_, err := pathlink.Ensure(pathlink.Options{
+		GoRoot: goroot,
+		BinDir: dir,
+		Path:   dir,
+	})
+	assert.NilError(t, err, "a writable directory should link cleanly")
+
+	// The link replaced it, and no backup is left behind.
+	target, err := os.Readlink(original)
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(goroot, "bin", "go"))
+
+	_, err = os.Stat(original + ".setup-go-old")
+	assert.Assert(t, os.IsNotExist(err), "the backup must be discarded once the link is in place")
+}
+
+// A directory that cannot be written to fails before the go it holds is
+// touched, rather than deleting it and then finding out.
+func TestEnsure_LeavesTheOriginalIntactWhenItCannotLink(t *testing.T) {
+	goroot := fakeGoRoot(t)
+	dir := t.TempDir()
+	original := filepath.Join(dir, "go")
+	assert.NilError(t, os.WriteFile(original, []byte("#!/bin/sh\necho original\n"), 0755))
+	assert.NilError(t, os.Chmod(dir, 0500))       //nolint:gosec // the point is that it is not writable
+	t.Cleanup(func() { _ = os.Chmod(dir, 0750) }) //nolint:gosec // restores what t.TempDir needs to clean up
+
+	_, err := pathlink.Ensure(pathlink.Options{GoRoot: goroot, BinDir: dir, Path: dir})
+	assert.Assert(t, err != nil, "expected linking into a read-only directory to fail")
+
+	got, readErr := os.ReadFile(original) //nolint:gosec // a path this test wrote
+	assert.NilError(t, readErr, "the go that was already there must still be there")
+	assert.Assert(t, strings.Contains(string(got), "echo original"))
+}

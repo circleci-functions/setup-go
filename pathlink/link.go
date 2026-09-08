@@ -1,6 +1,7 @@
 package pathlink
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,17 +43,65 @@ func linkFile(src, dst string, elevate bool) error {
 	if elevate {
 		return sudoSymlink(src, dst)
 	}
-	_ = os.Remove(dst)
-	err := os.Symlink(src, dst)
-	if err == nil {
+
+	// Anything already there is moved aside rather than deleted, so a failure
+	// below leaves the executor with the toolchain it had. Taking over the
+	// directory a preinstalled toolchain lives in means dst is that
+	// toolchain's own binary.
+	restore, err := moveAside(dst)
+	if err != nil {
+		return err
+	}
+
+	if err := os.Symlink(src, dst); err == nil {
+		return restore.commit()
+	} else if runtime.GOOS != "windows" {
+		return errors.Join(err, restore.undo())
+	}
+
+	// Windows withholds symlink creation from unprivileged processes. A shim
+	// forwarding to the absolute path keeps GOROOT detection intact, and is
+	// found by name because moveAside took any competing go.exe out of the
+	// way — PATHEXT would otherwise prefer it to a .bat.
+	if err := writeShims(src, dst); err != nil {
+		return errors.Join(err, restore.undo())
+	}
+	return restore.commit()
+}
+
+// backup is a file moved out of the way, restorable until committed.
+type backup struct{ from, to string }
+
+func moveAside(path string) (backup, error) {
+	if _, err := os.Lstat(path); err != nil {
+		return backup{}, nil
+	}
+	aside := path + ".setup-go-old"
+	_ = os.Remove(aside)
+	if err := os.Rename(path, aside); err != nil {
+		return backup{}, fmt.Errorf("move %s aside: %w", path, err)
+	}
+	return backup{from: aside, to: path}, nil
+}
+
+// commit discards the backup, leaving the link in place.
+func (b backup) commit() error {
+	if b.from != "" {
+		_ = os.Remove(b.from)
+	}
+	return nil
+}
+
+// undo puts the original back, for a failure that would otherwise leave the
+// job with no go at all.
+func (b backup) undo() error {
+	if b.from == "" {
 		return nil
 	}
-	// Windows withholds symlink creation from unprivileged processes; a shim
-	// forwarding to the absolute path keeps GOROOT detection intact.
-	if runtime.GOOS == "windows" {
-		return writeShims(src, dst)
+	if err := os.Rename(b.from, b.to); err != nil {
+		return fmt.Errorf("restore %s: %w", b.to, err)
 	}
-	return err
+	return nil
 }
 
 // sudoSymlink replaces a root-owned entry on PATH. -n so a job without

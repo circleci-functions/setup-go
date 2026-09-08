@@ -293,13 +293,24 @@ func exeName(name string) string {
 // from its environment: a toolchain honours that variable over its own
 // location, so leaving it set would report the caller's GOROOT for any binary.
 func goRootOf(bin string) (string, error) {
-	cmd := exec.Command(bin, "env", "GOROOT") //nolint:gosec // bin came from PATH
+	cmd := goCommand(bin, "env", "GOROOT")
 	cmd.Env = withoutGoRoot(os.Environ())
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// goCommand runs a toolchain entry point. CreateProcess cannot execute a .bat
+// directly, so a shim written by writeShims has to go through cmd.
+func goCommand(bin string, args ...string) *exec.Cmd {
+	switch strings.ToLower(filepath.Ext(bin)) {
+	case ".bat", ".cmd":
+		return exec.Command("cmd", append([]string{"/c", bin}, args...)...) //nolint:gosec // bin came from PATH
+	default:
+		return exec.Command(bin, args...) //nolint:gosec // bin came from PATH
+	}
 }
 
 func withoutGoRoot(env []string) []string {
