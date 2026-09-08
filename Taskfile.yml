@@ -42,6 +42,37 @@ tasks:
     cmds:
       - go tool release --name setup-go --version v0.0.0-dryrun --dry-run
 
+  build-acceptance:
+    desc: Cross-compile the acceptance suite, so an executor with no Go can run it
+    cmds:
+      - |
+        set -eu
+        for platform in linux/amd64 darwin/arm64 windows/amd64; do
+          os="${platform%/*}"; arch="${platform#*/}"
+          out="dist/acceptance/$os/$arch/acceptance"
+          if [ "$os" = windows ]; then out="$out.exe"; fi
+          GOOS="$os" GOARCH="$arch" go test -c -tags acceptance -o "$out" ./acceptance
+          echo "built $out"
+        done
+
+  smoke-local:
+    desc: >-
+      Run the cross-platform smoke check in a container, the way the release
+      jobs do. IMAGE picks the executor to stand in for; it must have no Go
+      unless you want the preinstalled case.
+    deps: [dry-run, build-acceptance]
+    vars:
+      IMAGE: '{{.IMAGE | default "cimg/base:stable"}}'
+    cmds:
+      - |
+        set -eu
+        docker run --rm -v "$PWD/dist:/dist" \
+          -e SETUP_GO_DISPOSABLE=1 \
+          -e SETUP_GO_BINARY=/dist/setup-go/linux/amd64/setup-go \
+          -e SETUP_GO_ACCEPTANCE_VERSION="{{.VERSION | default "1.26.4"}}" \
+          {{.IMAGE}} \
+          /dist/acceptance/linux/amd64/acceptance -test.v -test.run TestAcceptance_LinksOntoTheRealPath
+
   ci:
     desc: Run everything CI runs (lint + test + dry-run)
     cmds:

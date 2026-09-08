@@ -33,35 +33,24 @@ executors:
     resource_class: windows.medium
 
 commands:
-  assert-installed-go-resolves:
+  smoke:
     description: >-
-      Fails unless a step after the install resolves `go` by name, to the
-      version asked for. Nothing is sourced, so it passes only if the toolchain
-      is reachable through PATH itself.
+      Let setup-go pick where the toolchain goes on this executor's real PATH,
+      then resolve `go` by name in a process that sourced nothing.
+    parameters:
+      binary:
+        type: string
+        description: The setup-go artifact to exercise.
+      suite:
+        type: string
+        description: The cross-compiled acceptance suite to run it with.
     steps:
       - run:
-          name: A later step resolves the installed go
-          command: |
-            command -v go
-            go version
-            case "$(go version)" in
-              *"go<< pipeline.parameters.go-version >> "*) ;;
-              *) echo "expected go<< pipeline.parameters.go-version >>, got $(go version)" >&2; exit 1 ;;
-            esac
-
-  assert-nothing-exported:
-    description: >-
-      Fails if setup-go wrote a PATH export to $BASH_ENV. Nothing should need
-      sourcing now.
-    steps:
-      - run:
-          name: $BASH_ENV holds no PATH export
-          command: |
-            if [ -f "$BASH_ENV" ] && grep -q '^export PATH=' "$BASH_ENV"; then
-              echo "setup-go exported PATH to \$BASH_ENV:" >&2
-              cat "$BASH_ENV" >&2
-              exit 1
-            fi
+          name: Link the toolchain onto PATH and resolve it afterwards
+          command: << parameters.suite >> -test.v -test.run TestAcceptance_LinksOntoTheRealPath
+          environment:
+            SETUP_GO_BINARY: << parameters.binary >>
+            SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
 
 jobs:
   test:
@@ -93,6 +82,8 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task dry-run
+      # The suite as a binary too, so an executor with no Go can run it.
+      - run: task build-acceptance
       - persist_to_workspace:
           root: .
           paths:
@@ -120,66 +111,48 @@ jobs:
             # than falling back if it can't reach it.
             TOOLKIT_CACHE_MODE: live
 
-  # The one property that needs an image without Go: the shipped artifact
-  # bootstraps a toolchain from nothing and leaves it on PATH for later steps.
+  # Each of these runs the packaged suite against the packaged artifact, so the
+  # executor needs no Go, no modules and no checkout. `task smoke-local`
+  # reproduces the Linux ones in a container.
+  #
+  # cimg/base is the only image here with no Go at all, so it also proves
+  # setup-go bootstraps from nothing. It runs on every push; the rest are the
+  # expensive executors and gate the release instead.
   bare-smoke:
     executor: base
     steps:
-      - checkout
       - attach_workspace:
           at: .
-      - run:
-          name: Install Go from nothing
-          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
-      - assert-installed-go-resolves
-      - assert-nothing-exported
+      - smoke:
+          binary: ./dist/setup-go/linux/amd64/setup-go
+          suite: ./dist/acceptance/linux/amd64/acceptance
 
-  # Each executor arranges PATH differently; all assert the same thing in a
-  # step after the install. These run on release tags rather than every push:
-  # they are the expensive executors, and `acceptance` covers discovery against
-  # a real PATH on every push.
   smoke-machine:
     executor: machine
     steps:
       - attach_workspace:
           at: .
-      - run:
-          name: Install Go on a VM
-          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
-      - assert-installed-go-resolves
-      - assert-nothing-exported
+      - smoke:
+          binary: ./dist/setup-go/linux/amd64/setup-go
+          suite: ./dist/acceptance/linux/amd64/acceptance
 
   smoke-macos:
     executor: macos
     steps:
       - attach_workspace:
           at: .
-      - run:
-          name: Install Go on macOS
-          command: ./dist/setup-go/darwin/arm64/setup-go --version << pipeline.parameters.go-version >>
-      - assert-installed-go-resolves
-      - assert-nothing-exported
+      - smoke:
+          binary: ./dist/setup-go/darwin/arm64/setup-go
+          suite: ./dist/acceptance/darwin/arm64/acceptance
 
   smoke-windows:
     executor: windows
     steps:
       - attach_workspace:
           at: .
-      - run:
-          name: Install Go on Windows
-          command: ./dist/setup-go/windows/amd64/setup-go.exe --version << pipeline.parameters.go-version >>
-      - assert-installed-go-resolves
-      - assert-nothing-exported
-      # The shell $BASH_ENV never reached.
-      - run:
-          name: A later step in another shell resolves it too
-          shell: powershell.exe -ExecutionPolicy Bypass
-          command: |
-            go version
-            if (-not (go version | Select-String -SimpleMatch "go<< pipeline.parameters.go-version >>")) {
-              Write-Error "expected go<< pipeline.parameters.go-version >>"
-              exit 1
-            }
+      - smoke:
+          binary: ./dist/setup-go/windows/amd64/setup-go.exe
+          suite: ./dist/acceptance/windows/amd64/acceptance.exe
 
   publish:
     executor: go

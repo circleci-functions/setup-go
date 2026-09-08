@@ -18,6 +18,11 @@ import (
 	"github.com/circleci-functions/toolkit/testing/runner"
 )
 
+// binaryPathEnvVar names a prebuilt setup-go to test, for an executor with no
+// Go toolchain to compile one with. The smoke jobs set it, and pair it with a
+// cross-compiled copy of this suite.
+const binaryPathEnvVar = "SETUP_GO_BINARY"
+
 var binaryPath string
 
 func TestMain(m *testing.M) {
@@ -30,6 +35,11 @@ func TestMain(m *testing.M) {
 }
 
 func runTests(m *testing.M) (int, error) {
+	if bin := os.Getenv(binaryPathEnvVar); bin != "" {
+		binaryPath = bin
+		return m.Run(), nil
+	}
+
 	p := compiler.NewParallel(1)
 	defer p.Cleanup()
 

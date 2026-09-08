@@ -20,10 +20,13 @@ import (
 // depends on the executor, and a sandboxed suite never reaches it — which is
 // how a link into ~/.pyenv/shims got as far as CI.
 //
-// It changes the executor it runs on, up to taking over the `go` already there,
-// so it runs only inside a job.
+// It changes the machine it runs on, up to taking over the `go` already there,
+// so it runs only where that is disposable: a CircleCI job, or a container the
+// caller vouches for with $SETUP_GO_DISPOSABLE (see `task smoke-local`).
 func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
-	sdktest.SkipUnlessInJob(t)
+	if os.Getenv("SETUP_GO_DISPOSABLE") == "" {
+		sdktest.SkipUnlessInJob(t)
+	}
 
 	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
 	version := acceptanceVersion()
