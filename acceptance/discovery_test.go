@@ -31,15 +31,19 @@ func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
 	version := acceptanceVersion()
 
-	// Only $BASH_ENV is redirected, since CI writes to the job's own. $HOME
-	// stays real: the choice of directory is made from it.
+	// The job's own environment, which is what a step gets: $HOME and $GOPATH
+	// both decide which directory is picked, and passing a trimmed set made
+	// this test exercise a different choice than production would.
+	//
+	// $BASH_ENV is redirected because CI writes to the job's own, and $GOROOT
+	// dropped because a toolchain honours it over its own location.
 	bashEnv := filepath.Join(t.TempDir(), "bash_env")
-	r := runner.New(t, binaryPath, runner.WithUnsafeAdditionalEnvVars(map[string]string{
-		"HOME":        homeDir(t),
-		"USERPROFILE": homeDir(t),
-		"BASH_ENV":    bashEnv,
-		"GOROOT":      "",
-	}))
+	r := runner.New(t, binaryPath,
+		runner.WithUnsafeOSEnvVars(),
+		runner.WithUnsafeAdditionalEnvVars(map[string]string{
+			"BASH_ENV": bashEnv,
+			"GOROOT":   "",
+		}))
 
 	_, err := r.Run(
 		"--version", version,
@@ -102,15 +106,6 @@ func removeLinks(t *testing.T, dir string) {
 			}
 		}
 	})
-}
-
-// homeDir returns the real home directory, which a job step has and the runner
-// does not pass through.
-func homeDir(t *testing.T) string {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	assert.NilError(t, err)
-	return home
 }
 
 func assertReportsVersion(t *testing.T, out, want string) {
