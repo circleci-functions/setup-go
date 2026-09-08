@@ -139,8 +139,11 @@ jobs:
   # reproduces the Linux ones in a container.
   #
   # cimg/base is the only image here with no Go at all, so it also proves
-  # setup-go bootstraps from nothing. It runs on every push; the rest are the
-  # expensive executors and gate the release instead.
+  # setup-go bootstraps from nothing.
+  #
+  # All of these run on every push for now. The VM, macOS and Windows ones are
+  # the expensive executors, and publish already requires them, so they can move
+  # to the release path once the linking they cover stops changing.
   bare-smoke:
     executor: base
     steps:
@@ -221,23 +224,17 @@ workflows:
           requires: [build]
           filters:
             tags:
-              only: /^v\d+\.\d+\.\d+$/
-            branches:
-              ignore: /.*/
+              only: /.*/
       - smoke-macos:
           requires: [build]
           filters:
             tags:
-              only: /^v\d+\.\d+\.\d+$/
-            branches:
-              ignore: /.*/
+              only: /.*/
       - smoke-windows:
           requires: [build]
           filters:
             tags:
-              only: /^v\d+\.\d+\.\d+$/
-            branches:
-              ignore: /.*/
+              only: /.*/
       - publish:
           requires:
             - test
