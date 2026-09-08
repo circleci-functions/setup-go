@@ -75,9 +75,9 @@ func Ensure(opts Options) (Result, error) {
 	}
 
 	// Already resolvable: --detect-only, or GOROOT/bin is itself on PATH.
-	if dir, ok := resolves(dirs, opts.GoRoot); ok {
-		reportGoPathBin(opts.GoPath, dir, dirs, false)
-		return Result{Dir: dir, Verified: true}, nil
+	if r, ok := resolveGo(dirs); ok && r.matches(opts.GoRoot) {
+		reportGoPathBin(opts.GoPath, r.dir, dirs, false)
+		return Result{Dir: r.dir, Verified: true}, nil
 	}
 
 	dir, elevate := ChooseDir(dirs, IndexOfGo(dirs), PreferredDirs(opts.GoPath), Writable)
@@ -91,10 +91,8 @@ func Ensure(opts Options) (Result, error) {
 	}
 	reportGoPathBin(opts.GoPath, dir, dirs, elevate)
 
-	if _, ok := resolves(dirs, opts.GoRoot); !ok {
-		return Result{Dir: dir}, fmt.Errorf(
-			"pathlink: linked go into %s, but PATH still resolves go elsewhere (PATH=%s)",
-			dir, strings.Join(dirs, string(os.PathListSeparator)))
+	if r, ok := resolveGo(dirs); !ok || !r.matches(opts.GoRoot) {
+		return Result{Dir: dir}, fmt.Errorf("pathlink: linked go into %s, but %s", dir, r.explain(opts.GoRoot))
 	}
 	return Result{Dir: dir, Verified: true}, nil
 }
@@ -248,19 +246,42 @@ func canCreateIn(dir string) error {
 	return os.Remove(name)
 }
 
-// resolves reports the directory PATH resolves `go` from, and whether that go
-// belongs to goroot.
-func resolves(dirs []string, goroot string) (string, bool) {
+// resolution is the `go` PATH resolves to, and what it says about itself.
+type resolution struct {
+	dir  string // the PATH entry it was found in
+	bin  string // the executable PATH resolves to
+	root string // the GOROOT it reports
+	err  error  // why it could not be asked
+}
+
+// resolveGo finds the `go` a later step would run and asks where its GOROOT
+// is. It reports false when PATH holds no go at all.
+func resolveGo(dirs []string) (resolution, bool) {
 	i := IndexOfGo(dirs)
 	if i < 0 {
-		return "", false
+		return resolution{}, false
 	}
-	bin := goIn(dirs[i])
-	root, err := goRootOf(bin)
-	if err != nil {
-		return dirs[i], false
+	r := resolution{dir: dirs[i], bin: goIn(dirs[i])}
+	r.root, r.err = goRootOf(r.bin)
+	return r, true
+}
+
+// matches reports whether the resolved go is goroot's own.
+func (r resolution) matches(goroot string) bool {
+	return r.err == nil && sameDir(r.root, goroot)
+}
+
+// explain says why the resolved go is not the one wanted, in the terms needed
+// to tell a shadowed link from a toolchain that will not answer.
+func (r resolution) explain(goroot string) string {
+	switch {
+	case r.bin == "":
+		return "PATH holds no go at all"
+	case r.err != nil:
+		return fmt.Sprintf("PATH resolves go to %s, which could not report its GOROOT: %v", r.bin, r.err)
+	default:
+		return fmt.Sprintf("PATH resolves go to %s, whose GOROOT is %q, not %q", r.bin, r.root, goroot)
 	}
-	return dirs[i], sameDir(root, goroot)
 }
 
 // goIn returns the path to an executable go in dir, or "". On Windows it also

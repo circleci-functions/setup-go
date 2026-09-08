@@ -95,7 +95,12 @@ func TestEnsure_FailsWhenTheResolvedToolchainIsNotTheOneInstalled(t *testing.T) 
 	assert.NilError(t, os.WriteFile(filepath.Join(goroot, "bin", "go"), []byte(script), 0755))
 
 	_, err := pathlink.Ensure(pathlink.Options{GoRoot: goroot, Path: t.TempDir()})
-	assert.ErrorContains(t, err, "PATH still resolves go elsewhere")
+	// The message has to name the toolchain that answered and the GOROOT it
+	// claimed: without those, a shadowed link and a toolchain that will not
+	// answer are indistinguishable from the log.
+	assert.ErrorContains(t, err, "PATH resolves go to ")
+	assert.ErrorContains(t, err, "whose GOROOT is ")
+	assert.ErrorContains(t, err, elsewhere)
 }
 
 func TestEnsure_BinDirSkipsDiscoveryAndVerification(t *testing.T) {

@@ -53,17 +53,21 @@ func linkFile(src, dst string, elevate bool) error {
 		return err
 	}
 
-	if err := os.Symlink(src, dst); err == nil {
-		return restore.commit()
-	} else if runtime.GOOS != "windows" {
-		return errors.Join(err, restore.undo())
+	// Windows gets shims rather than a symlink. A Go toolchain works out its
+	// GOROOT from where its own executable sits, and taking over a
+	// preinstalled toolchain means linking into that toolchain's bin
+	// directory — so a symlink there resolves GOROOT to the old toolchain
+	// beside it. A shim invoking the absolute path cannot: it runs the real
+	// binary, in its own GOROOT. It is also found by name whatever the shell,
+	// and needs no symlink privilege.
+	//
+	// moveAside has taken any competing go.exe out of the way, which PATHEXT
+	// would otherwise prefer to a .bat.
+	link := os.Symlink
+	if runtime.GOOS == "windows" {
+		link = writeShims
 	}
-
-	// Windows withholds symlink creation from unprivileged processes. A shim
-	// forwarding to the absolute path keeps GOROOT detection intact, and is
-	// found by name because moveAside took any competing go.exe out of the
-	// way — PATHEXT would otherwise prefer it to a .bat.
-	if err := writeShims(src, dst); err != nil {
+	if err := link(src, dst); err != nil {
 		return errors.Join(err, restore.undo())
 	}
 	return restore.commit()
