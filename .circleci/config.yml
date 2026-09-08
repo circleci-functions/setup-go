@@ -26,8 +26,7 @@ executors:
       image: ubuntu-2404:current
   macos:
     macos:
-      xcode: 16.2.0
-    resource_class: macos.m1.medium.gen1
+      xcode: "16.4.0"
   windows:
     machine:
       image: windows-server-2022-gui:current
