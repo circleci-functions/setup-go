@@ -37,20 +37,37 @@ commands:
     description: >-
       Let setup-go pick where the toolchain goes on this executor's real PATH,
       then resolve `go` by name in a process that sourced nothing.
+
+      Everything runs from the workspace, so the executor needs no Go, no
+      modules and no checkout: the suite is a cross-compiled test binary, and
+      test2json and gotestsum turn its output into the JUnit CircleCI collects.
+      gotestsum warns that it cannot find `go` to record a version with; that
+      is the point, and harmless.
     parameters:
-      binary:
+      platform:
         type: string
-        description: The setup-go artifact to exercise.
-      suite:
+        description: The os/arch whose artifacts to run, e.g. linux/amd64.
+      ext:
         type: string
-        description: The cross-compiled acceptance suite to run it with.
+        default: ""
+        description: Executable suffix for the platform.
     steps:
       - run:
           name: Link the toolchain onto PATH and resolve it afterwards
-          command: << parameters.suite >> -test.v -test.run TestAcceptance_LinksOntoTheRealPath
+          command: |
+            mkdir -p test-results
+            ./dist/tools/<< parameters.platform >>/gotestsum<< parameters.ext >> \
+              --junitfile test-results/smoke.xml \
+              --raw-command -- \
+              ./dist/tools/<< parameters.platform >>/test2json<< parameters.ext >> \
+                -p acceptance \
+                ./dist/acceptance/<< parameters.platform >>/acceptance<< parameters.ext >> \
+                -test.v=test2json -test.run TestAcceptance_LinksOntoTheRealPath
           environment:
-            SETUP_GO_BINARY: << parameters.binary >>
+            SETUP_GO_BINARY: ./dist/setup-go/<< parameters.platform >>/setup-go<< parameters.ext >>
             SETUP_GO_ACCEPTANCE_VERSION: << pipeline.parameters.go-version >>
+      - store_test_results:
+          path: test-results
 
 jobs:
   test:
@@ -64,6 +81,8 @@ jobs:
             - setup-go-go-
       - run: task lint
       - run: task test
+      - store_test_results:
+          path: test-results
       - save_cache:
           key: setup-go-go-{{ checksum "go.sum" }}-{{ epoch }}
           paths:
@@ -82,8 +101,10 @@ jobs:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
       - run: task dry-run
-      # The suite as a binary too, so an executor with no Go can run it.
+      # The suite as a binary, plus the tools to report it, so an executor with
+      # no Go can run and record it.
       - run: task build-acceptance
+      - run: task build-tools
       - persist_to_workspace:
           root: .
           paths:
@@ -110,6 +131,8 @@ jobs:
             # round-trips here exercise the real thing. The suite fails rather
             # than falling back if it can't reach it.
             TOOLKIT_CACHE_MODE: live
+      - store_test_results:
+          path: test-results
 
   # Each of these runs the packaged suite against the packaged artifact, so the
   # executor needs no Go, no modules and no checkout. `task smoke-local`
@@ -124,8 +147,7 @@ jobs:
       - attach_workspace:
           at: .
       - smoke:
-          binary: ./dist/setup-go/linux/amd64/setup-go
-          suite: ./dist/acceptance/linux/amd64/acceptance
+          platform: linux/amd64
 
   smoke-machine:
     executor: machine
@@ -133,8 +155,7 @@ jobs:
       - attach_workspace:
           at: .
       - smoke:
-          binary: ./dist/setup-go/linux/amd64/setup-go
-          suite: ./dist/acceptance/linux/amd64/acceptance
+          platform: linux/amd64
 
   smoke-macos:
     executor: macos
@@ -142,8 +163,7 @@ jobs:
       - attach_workspace:
           at: .
       - smoke:
-          binary: ./dist/setup-go/darwin/arm64/setup-go
-          suite: ./dist/acceptance/darwin/arm64/acceptance
+          platform: darwin/arm64
 
   smoke-windows:
     executor: windows
@@ -151,8 +171,8 @@ jobs:
       - attach_workspace:
           at: .
       - smoke:
-          binary: ./dist/setup-go/windows/amd64/setup-go.exe
-          suite: ./dist/acceptance/windows/amd64/acceptance.exe
+          platform: windows/amd64
+          ext: ".exe"
 
   publish:
     executor: go

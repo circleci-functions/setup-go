@@ -19,12 +19,12 @@ tasks:
   test:
     desc: Run unit and CLI tests (hermetic, no network)
     cmds:
-      - go tool gotestsum -- ./...
+      - go tool gotestsum --junitfile test-results/unit.xml -- ./...
 
   acceptance:
     desc: Run acceptance tests against real go.dev (network required; safe to run locally)
     cmds:
-      - go test -tags acceptance -v -timeout 20m ./acceptance/...
+      - go tool gotestsum --junitfile test-results/acceptance.xml -- -tags acceptance -timeout 20m ./acceptance/...
 
   tidy:
     desc: Tidy go.mod / go.sum
@@ -58,34 +58,51 @@ tasks:
           echo "built $out"
         done
 
-  smoke-local:
+  build-tools:
     desc: >-
-      Run the cross-platform smoke check in a container, the way the release
-      jobs do. IMAGE picks the executor to stand in for; it must have no Go
-      unless you want the preinstalled case.
-    deps: [dry-run, build-acceptance]
-    vars:
-      IMAGE: '{{.IMAGE | default "cimg/base:stable"}}'
+      Cross-compile test2json and gotestsum, so an executor with no Go can turn
+      the packaged suite's output into the JUnit XML CircleCI collects.
     cmds:
       - |
         set -eu
-        docker run --rm -v "$PWD/dist:/dist" \
+        for platform in linux/amd64 darwin/arm64 windows/amd64; do
+          os="${platform%/*}"; arch="${platform#*/}"
+          ext=""
+          if [ "$os" = windows ]; then ext=".exe"; fi
+          for tool in cmd/test2json gotest.tools/gotestsum; do
+            name="${tool##*/}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -o "dist/tools/$os/$arch/$name$ext" "$tool"
+          done
+          echo "built dist/tools/$os/$arch/{test2json,gotestsum}$ext"
+        done
+
+  smoke-local:
+    desc: >-
+      Run the cross-platform smoke check in a container, with the same command
+      the release jobs use. IMAGE picks the executor to stand in for; the
+      default has no Go, so it also covers bootstrapping from nothing.
+    deps: [dry-run, build-acceptance, build-tools]
+    vars:
+      IMAGE: '{{.IMAGE | default "cimg/base:stable"}}'
+      VERSION: '{{.VERSION | default "1.26.4"}}'
+    cmds:
+      - |
+        set -eu
+        docker run --rm \
+          -v "$PWD/dist:/home/circleci/project/dist" \
+          -w /home/circleci/project \
           -e SETUP_GO_DISPOSABLE=1 \
-          -e SETUP_GO_BINARY=/dist/setup-go/linux/amd64/setup-go \
-          -e SETUP_GO_ACCEPTANCE_VERSION="{{.VERSION | default "1.26.4"}}" \
+          -e SETUP_GO_BINARY=./dist/setup-go/linux/amd64/setup-go \
+          -e SETUP_GO_ACCEPTANCE_VERSION="{{.VERSION}}" \
           {{.IMAGE}} \
-          /dist/acceptance/linux/amd64/acceptance -test.v -test.run TestAcceptance_LinksOntoTheRealPath
-
-  ci:
-    desc: Run everything CI runs (lint + test + dry-run)
-    cmds:
-      - task: lint
-      - task: test
-      - task: dry-run
-
-  publish:
-    desc: Build and publish setup-go to S3 (VERSION required)
-    requires:
-      vars: [VERSION]
-    cmds:
-      - go tool release --name setup-go --version "{{.VERSION}}"
+          bash -c '
+            mkdir -p test-results
+            ./dist/tools/linux/amd64/gotestsum \
+              --junitfile test-results/smoke.xml \
+              --raw-command -- \
+              ./dist/tools/linux/amd64/test2json -p acceptance \
+                ./dist/acceptance/linux/amd64/acceptance \
+                -test.v=test2json -test.run TestAcceptance_LinksOntoTheRealPath
+            echo "wrote $(wc -l < test-results/smoke.xml) lines of JUnit"
+          '
