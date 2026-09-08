@@ -10,13 +10,12 @@ import (
 	"strings"
 )
 
-// linkInto points dir/go and dir/gofmt at goroot's copies. When elevate is set
-// the links are made with sudo, which is what replacing a preinstalled
-// toolchain in a root-owned directory takes.
+// linkInto points dir/go and dir/gofmt at goroot's copies, with sudo when
+// elevate is set.
 //
-// A symlink rather than a copy: a Go toolchain locates GOROOT from its own
-// executable path, resolving symlinks on the way, so a symlinked go finds
-// goroot while a copy would look for a toolchain beside the copy.
+// A symlink rather than a copy: a toolchain finds GOROOT from its own
+// executable path, resolving symlinks, so a copy would look for a toolchain
+// beside itself.
 func linkInto(dir, goroot string, elevate bool) error {
 	if !elevate {
 		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // a directory on PATH is readable by design
@@ -44,25 +43,18 @@ func linkFile(src, dst string, elevate bool) error {
 		return sudoSymlink(src, dst)
 	}
 
-	// Anything already there is moved aside rather than deleted, so a failure
-	// below leaves the executor with the toolchain it had. Taking over the
-	// directory a preinstalled toolchain lives in means dst is that
-	// toolchain's own binary.
+	// Moved aside rather than deleted: taking over a preinstalled toolchain
+	// means dst is its own binary, and a failure below must leave it working.
 	restore, err := moveAside(dst)
 	if err != nil {
 		return err
 	}
 
-	// Windows gets shims rather than a symlink. A Go toolchain works out its
-	// GOROOT from where its own executable sits, and taking over a
-	// preinstalled toolchain means linking into that toolchain's bin
-	// directory — so a symlink there resolves GOROOT to the old toolchain
-	// beside it. A shim invoking the absolute path cannot: it runs the real
-	// binary, in its own GOROOT. It is also found by name whatever the shell,
-	// and needs no symlink privilege.
-	//
-	// moveAside has taken any competing go.exe out of the way, which PATHEXT
-	// would otherwise prefer to a .bat.
+	// Windows gets shims, not a symlink: taking over a preinstalled toolchain
+	// links into its bin directory, where a symlink would resolve GOROOT to the
+	// old toolchain beside it. A shim invokes the absolute path instead, needs
+	// no symlink privilege, and — since moveAside removed any competing go.exe
+	// that PATHEXT would prefer — is found by name in any shell.
 	link := os.Symlink
 	if runtime.GOOS == "windows" {
 		link = writeShims
@@ -73,7 +65,7 @@ func linkFile(src, dst string, elevate bool) error {
 	return restore.commit()
 }
 
-// backup is a file moved out of the way, restorable until committed.
+// backup is a file moved aside, restorable until committed.
 type backup struct{ from, to string }
 
 func moveAside(path string) (backup, error) {
@@ -96,8 +88,7 @@ func (b backup) commit() error {
 	return nil
 }
 
-// undo puts the original back, for a failure that would otherwise leave the
-// job with no go at all.
+// undo puts the original back, rather than leaving the job with no go.
 func (b backup) undo() error {
 	if b.from == "" {
 		return nil
@@ -109,8 +100,7 @@ func (b backup) undo() error {
 }
 
 // sudoSymlink replaces a root-owned entry on PATH. -n so a job without
-// passwordless sudo fails here rather than blocking on a password prompt no
-// one is there to answer.
+// passwordless sudo fails rather than blocking on a prompt.
 func sudoSymlink(src, dst string) error {
 	if out, err := exec.Command("sudo", "-n", "ln", "-sf", src, dst).CombinedOutput(); err != nil {
 		return fmt.Errorf("sudo ln: %s", firstLine(out))
@@ -118,10 +108,9 @@ func sudoSymlink(src, dst string) error {
 	return nil
 }
 
-// writeShims stands in for a symlink on Windows, where creating one needs a
-// privilege a job does not always hold. Two shims, because a job's steps do not
-// all run in the same shell: a .bat for cmd and PowerShell, and an
-// extensionless script for the Git Bash that a bash-shelled step uses.
+// writeShims writes two, because a job's steps do not all run in the same
+// shell: a .bat for cmd and PowerShell, and an extensionless script for Git
+// Bash.
 func writeShims(src, dst string) error {
 	base := dst[:len(dst)-len(filepath.Ext(dst))]
 
@@ -134,13 +123,10 @@ func writeShims(src, dst string) error {
 	return os.WriteFile(base, []byte(sh), 0755) //nolint:gosec // must be executable
 }
 
-// reportGoPathBin makes what `go install` writes reachable by name, or explains
-// why it is not. GOPATH/bin cannot hold a link the way a PATH directory can —
-// the binaries do not exist yet — so the directory itself has to be somewhere
-// PATH already looks.
-//
-// Best effort by design: the toolchain resolving is the guarantee this package
-// makes, and a job that never runs `go install` does not care about this.
+// reportGoPathBin makes what `go install` writes reachable, or says why it is
+// not. Its binaries do not exist yet, so the directory itself has to be
+// somewhere PATH already looks. Best effort: only the toolchain resolving is
+// guaranteed.
 func reportGoPathBin(goPath, linkedDir string, dirs []string, elevated bool) {
 	if goPath == "" {
 		return
@@ -153,24 +139,22 @@ func reportGoPathBin(goPath, linkedDir string, dirs []string, elevated bool) {
 		return
 	}
 
-	// A real directory already there cannot be pointed elsewhere without
-	// moving a job's own files, so say so rather than guess.
+	// Pointing a real directory elsewhere would move a job's own files.
 	if _, err := os.Lstat(bin); err == nil {
 		fmt.Fprintf(os.Stderr,
 			"setup-go: %s is not on PATH, so binaries from `go install` need their full path\n", bin)
 		return
 	}
 
-	// A directory that took elevation to link into is no good here: `go
-	// install` runs as the job's own user and would fail to write to it.
+	// `go install` runs as the job's own user, so a directory that took
+	// elevation is no good here.
 	if elevated {
 		fmt.Fprintf(os.Stderr,
 			"setup-go: %s is not on PATH, so binaries from `go install` need their full path\n", bin)
 		return
 	}
 
-	// Nothing there yet: make it the directory `go` was linked into, which PATH
-	// does hold, so `go install` writes straight onto PATH.
+	// Nothing there yet, so point it at the directory PATH does hold.
 	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil { //nolint:gosec // GOPATH is readable by design
 		return
 	}

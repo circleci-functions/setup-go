@@ -12,14 +12,14 @@ import (
 type GoEnv struct {
 	GOCACHE    string `json:"GOCACHE"`
 	GOMODCACHE string `json:"GOMODCACHE"`
-	// GOPATH is whatever the toolchain resolves it to, which respects a GOPATH
-	// already set in the job — setup-go neither inspects nor sets it.
+	// GOPATH as the toolchain resolves it, respecting any already set in the
+	// job; setup-go neither inspects nor sets it.
 	GOPATH string `json:"GOPATH"`
 }
 
-// LoadFrom runs `go env -json` using a specific go binary. Callers that have
-// just installed a toolchain must pass that toolchain's binary: it is not
-// resolvable by name until pathlink has linked it onto PATH.
+// LoadFrom runs `go env -json` with a specific go binary. A caller that just
+// installed a toolchain must pass that binary: it is not resolvable by name
+// until pathlink has linked it.
 func LoadFrom(ctx context.Context, goBinary string) (*GoEnv, error) {
 	out, err := exec.CommandContext(ctx, goBinary, "env", "-json").Output()
 	if err != nil {

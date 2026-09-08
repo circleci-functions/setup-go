@@ -1,11 +1,9 @@
 // Package pathlink makes an installed Go toolchain resolvable by name for the
 // rest of the job, by linking it into a directory PATH already holds.
 //
-// A CircleCI step inherits its environment from the job rather than from the
-// step before it, so a PATH prepend only carries if it is written somewhere the
-// next step's shell sources — $BASH_ENV, which needs that shell to be bash.
-// A link in a directory already on PATH carries to every later process, in any
-// shell, and to processes that never source a profile at all.
+// A step inherits its environment from the job, not from the step before it, so
+// a PATH prepend only carries via $BASH_ENV, and only into bash. A link carries
+// into any shell, and into processes that source nothing.
 package pathlink
 
 import (
@@ -18,48 +16,41 @@ import (
 	"strings"
 )
 
-// DefaultBinDir is the traditional place for a locally installed binary, and
-// the last preference on PATH. Windows has no equivalent, so there it is not
-// offered at all.
+// DefaultBinDir is the last preference on PATH. Windows has no equivalent.
 const DefaultBinDir = "/usr/local/bin"
 
-// linked are the toolchain binaries made resolvable by name. GOROOT/bin holds
-// only these two.
+// linked is all of GOROOT/bin.
 var linked = []string{"go", "gofmt"}
 
 // Options configures Ensure.
 type Options struct {
-	// GoRoot is the installed toolchain's root; GoRoot/bin holds the binaries
-	// to link.
+	// GoRoot is the installed toolchain's root.
 	GoRoot string
-	// GoPath is the effective GOPATH. Its bin directory is where `go install`
-	// writes, and is made reachable on a best-effort basis. Empty skips it.
+	// GoPath is the effective GOPATH, whose bin directory is made reachable on
+	// a best-effort basis. Empty skips it.
 	GoPath string
-	// BinDir links into exactly this directory and skips PATH discovery,
-	// leaving the result unverified. Tests set it so they cannot write into a
-	// directory on the developer's real PATH.
+	// BinDir links into exactly this directory and skips discovery, leaving the
+	// result unverified. Tests set it, so they cannot write to the real PATH.
 	BinDir string
-	// Path is the search path to inspect and verify against. Empty means the
-	// current process's PATH.
+	// Path is the search path to use. Empty means this process's PATH.
 	Path string
 }
 
 // Result describes what Ensure did.
 type Result struct {
-	// Dir is the directory `go` and `gofmt` now resolve from.
+	// Dir is where `go` and `gofmt` now resolve from.
 	Dir string
-	// Verified reports that PATH was confirmed to resolve `go` to GoRoot.
-	// False when BinDir skipped discovery, since a caller-chosen directory
-	// need not be on PATH at all.
+	// Verified reports that PATH was confirmed to resolve `go` to GoRoot. False
+	// when BinDir skipped discovery, since that directory need not be on PATH.
 	Verified bool
 }
 
-// Ensure makes `go` and `gofmt` from opts.GoRoot resolvable by name for any
-// later process that searches PATH, and reports where it linked them.
+// Ensure makes `go` and `gofmt` from opts.GoRoot resolvable by name, and
+// reports where it linked them.
 //
-// Unless opts.BinDir skips discovery, it fails if PATH does not resolve `go` to
-// opts.GoRoot afterwards, so a job stops at setup rather than building on with
-// a toolchain other than the one asked for.
+// Unless opts.BinDir skips discovery, it fails if PATH does not then resolve
+// `go` to opts.GoRoot, rather than letting the job build with another
+// toolchain.
 func Ensure(opts Options) (Result, error) {
 	if opts.GoRoot == "" {
 		return Result{}, errors.New("pathlink: GoRoot is required")
@@ -97,9 +88,8 @@ func Ensure(opts Options) (Result, error) {
 	return Result{Dir: dir, Verified: true}, nil
 }
 
-// SearchDirs splits path the way the OS does, dropping entries no link can be
-// relied on from: empty entries and relative ones, both of which resolve
-// against whatever directory a later step happens to run in.
+// SearchDirs splits path, dropping relative entries: those resolve against
+// whatever directory a later step runs in.
 func SearchDirs(path string) []string {
 	if path == "" {
 		path = os.Getenv("PATH")
@@ -114,9 +104,9 @@ func SearchDirs(path string) []string {
 	return dirs
 }
 
-// IndexOfGo returns the index of the first directory in dirs holding an
-// executable named go, or -1. That is the one a later step's `go` resolves to,
-// so it is the entry a link has to get ahead of or replace.
+// IndexOfGo returns the index of the first directory holding a go, or -1. That
+// is what a later step resolves, so a link has to get ahead of it or replace
+// it.
 func IndexOfGo(dirs []string) int {
 	for i, d := range dirs {
 		if goIn(d) != "" {
@@ -126,22 +116,15 @@ func IndexOfGo(dirs []string) int {
 	return -1
 }
 
-// ChooseDir picks the directory to link into, in order of preference rather
-// than PATH order: a job's PATH holds directories that belong to other tools,
-// and a version manager rewrites its shims whenever it rehashes, taking a link
-// left there with it. preferred names the directories conventionally meant for
-// this — GOPATH/bin, a user bin directory, /usr/local/bin — and any of them
-// that is on PATH is a better bet than whatever happens to come first.
+// ChooseDir picks the directory to link into, by preference rather than PATH
+// order: a version manager rewrites its shims when it rehashes, taking any link
+// left there with it. The choice has to come ahead of the `go` already on PATH
+// or it would be shadowed; failing that it takes that `go` over, which needs
+// elevation if its directory is root-owned.
 //
-// Whatever it picks has to come before the `go` already on PATH, or the link
-// would be shadowed by it; failing that it takes over that `go` where it
-// stands, which needs elevation if the directory holding it is root-owned.
-//
-// existing is the index the choice must get ahead of, or -1 when PATH holds no
-// go at all — in which case anything on PATH will do.
+// existing is the index to get ahead of, or -1 when PATH holds no go.
 func ChooseDir(dirs []string, existing int, preferred []string, writable func(string) bool) (dir string, elevate bool) {
-	// -1 means the directory is not on PATH at all, so a link there resolves
-	// for nobody.
+	// -1 is not on PATH at all, so a link there resolves for nobody.
 	ahead := func(i int) bool { return i >= 0 && (existing < 0 || i < existing) }
 
 	for _, p := range preferred {
@@ -149,9 +132,8 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 			return p, false
 		}
 	}
-	// Taking over the `go` already on PATH before falling back to scanning it:
-	// that directory is a toolchain's by definition, where an arbitrary
-	// writable entry belongs to whatever tool put it there.
+	// Before scanning: that directory is a toolchain's by definition, where an
+	// arbitrary writable entry belongs to whatever tool put it there.
 	if existing >= 0 {
 		return dirs[existing], !writable(dirs[existing])
 	}
@@ -166,9 +148,9 @@ func ChooseDir(dirs []string, existing int, preferred []string, writable func(st
 	return DefaultBinDir, !writable(DefaultBinDir)
 }
 
-// PreferredDirs returns the directories worth linking into ahead of anything
-// else PATH offers, best first. GOPATH/bin comes first because the Go
-// toolchain already writes there, so nothing else is going to reorganise it.
+// PreferredDirs returns the directories worth linking into, best first.
+// GOPATH/bin leads because the toolchain already writes there, so nothing else
+// reorganises it.
 func PreferredDirs(goPath string) []string {
 	var dirs []string
 	if bin := GoPathBin(goPath); bin != "" {
@@ -183,11 +165,8 @@ func PreferredDirs(goPath string) []string {
 	return dirs
 }
 
-// GoPathBin returns the bin directory `go install` writes to, or "".
-//
-// GOPATH is a list, and the machine executor sets two entries. `go install`
-// uses the first, and so does this: joining "bin" onto the whole list would
-// name a directory that is nobody's.
+// GoPathBin returns the bin directory `go install` writes to, or "". GOPATH is
+// a list — the machine executor sets two — and `go install` uses the first.
 func GoPathBin(goPath string) string {
 	for _, p := range filepath.SplitList(goPath) {
 		if p != "" {
@@ -198,8 +177,7 @@ func GoPathBin(goPath string) string {
 }
 
 // managed reports whether dir belongs to a tool that rewrites its contents.
-// Every version manager that shims executables — pyenv, rbenv, asdf, goenv —
-// names the directory it rewrites "shims".
+// pyenv, rbenv, asdf and goenv all call that directory "shims".
 func managed(dir string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
 		switch part {
@@ -220,9 +198,9 @@ func indexOfDir(dirs []string, dir string) int {
 	return -1
 }
 
-// Writable reports whether dir can be linked into without elevation, treating a
-// missing directory as writable when it can be created — PATH entries under
-// $HOME such as ~/.local/bin often do not exist yet.
+// Writable reports whether dir can be linked into without elevation. A missing
+// directory counts if it can be created: ~/.local/bin is often on PATH before
+// it exists.
 func Writable(dir string) bool {
 	if err := canCreateIn(dir); err == nil {
 		return true
@@ -233,9 +211,8 @@ func Writable(dir string) bool {
 	return canCreateIn(filepath.Dir(dir)) == nil
 }
 
-// canCreateIn reports whether the current process can create entries in dir, by
-// creating one. Checking the mode bits would answer for the wrong user under
-// sudo, and would miss a read-only mount.
+// canCreateIn tries it, rather than reading mode bits: those answer for the
+// wrong user under sudo and miss a read-only mount.
 func canCreateIn(dir string) error {
 	f, err := os.CreateTemp(dir, ".setup-go-*")
 	if err != nil {
@@ -254,8 +231,8 @@ type resolution struct {
 	err  error  // why it could not be asked
 }
 
-// resolveGo finds the `go` a later step would run and asks where its GOROOT
-// is. It reports false when PATH holds no go at all.
+// resolveGo finds the `go` a later step would run and asks for its GOROOT.
+// False when PATH holds no go.
 func resolveGo(dirs []string) (resolution, bool) {
 	i := IndexOfGo(dirs)
 	if i < 0 {
@@ -271,8 +248,7 @@ func (r resolution) matches(goroot string) bool {
 	return r.err == nil && sameDir(r.root, goroot)
 }
 
-// explain says why the resolved go is not the one wanted, in the terms needed
-// to tell a shadowed link from a toolchain that will not answer.
+// explain distinguishes a shadowed link from a toolchain that will not answer.
 func (r resolution) explain(goroot string) string {
 	switch {
 	case r.bin == "":
@@ -284,8 +260,7 @@ func (r resolution) explain(goroot string) string {
 	}
 }
 
-// goIn returns the path to an executable go in dir, or "". On Windows it also
-// accepts the shims linkInto falls back to.
+// goIn returns an executable go in dir, or "". On Windows it accepts shims too.
 func goIn(dir string) string {
 	for _, name := range goNames() {
 		p := filepath.Join(dir, name)
@@ -310,9 +285,9 @@ func exeName(name string) string {
 	return name
 }
 
-// goRootOf asks the toolchain at bin where its GOROOT is. $GOROOT is dropped
-// from its environment: a toolchain honours that variable over its own
-// location, so leaving it set would report the caller's GOROOT for any binary.
+// goRootOf asks the toolchain at bin for its GOROOT. $GOROOT is dropped: a
+// toolchain honours it over its own location, so leaving it set would report
+// the caller's GOROOT for any binary.
 func goRootOf(bin string) (string, error) {
 	cmd := goCommand(bin, "env", "GOROOT")
 	cmd.Env = withoutGoRoot(os.Environ())
@@ -323,8 +298,8 @@ func goRootOf(bin string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// goCommand runs a toolchain entry point. CreateProcess cannot execute a .bat
-// directly, so a shim written by writeShims has to go through cmd.
+// goCommand runs a toolchain entry point. CreateProcess cannot execute a .bat,
+// so a shim has to go through cmd.
 func goCommand(bin string, args ...string) *exec.Cmd {
 	switch strings.ToLower(filepath.Ext(bin)) {
 	case ".bat", ".cmd":
@@ -345,8 +320,8 @@ func withoutGoRoot(env []string) []string {
 	return out
 }
 
-// sameDir compares two paths as the filesystem would, following symlinks so a
-// link into a PATH directory compares equal to the toolchain it points at.
+// sameDir compares paths as the filesystem would, so a link compares equal to
+// what it points at.
 func sameDir(a, b string) bool {
 	if a == "" || b == "" {
 		return false

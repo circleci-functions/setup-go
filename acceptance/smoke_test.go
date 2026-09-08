@@ -74,12 +74,9 @@ func TestAcceptance_Smoke(t *testing.T) {
 	})
 }
 
-// assertLinkedGoVersion checks the link setup-go made points at the toolchain
-// it installed, rather than at a Go the executor happened to ship.
-//
-// The suite passes --bin-dir, so the link lands in the sandbox instead of a
-// directory on the real PATH. That is what makes the suite safe to run on a
-// laptop; the CI smoke jobs cover the discovery it skips.
+// assertLinkedGoVersion checks the link points at the toolchain setup-go
+// installed, not at a Go the executor shipped. --bin-dir keeps it in the
+// sandbox, so discovery is left to TestAcceptance_LinksOntoTheRealPath.
 func assertLinkedGoVersion(t *testing.T, binDir, installDir, want string) {
 	t.Helper()
 
@@ -102,13 +99,8 @@ func assertGoVersion(t *testing.T, goBinDir, want string) {
 	}
 }
 
-// assertResolvesFromPath runs `go version` in a shell that has binDir on PATH
-// and nothing sourced, which is what a later job step gets once setup-go has
-// linked the toolchain into a directory PATH already holds.
-//
-// The bare-smoke and cross-platform CI jobs cover the same contract end to
-// end, with a real job runner between two steps and no --bin-dir. This is the
-// local proxy for them.
+// assertResolvesFromPath runs `go version` with binDir on PATH and nothing
+// sourced, the local proxy for what a later step gets.
 func assertResolvesFromPath(t *testing.T, binDir, want string) {
 	t.Helper()
 

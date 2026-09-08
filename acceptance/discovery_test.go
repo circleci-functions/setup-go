@@ -16,25 +16,20 @@ import (
 )
 
 // TestAcceptance_LinksOntoTheRealPath is the one test that lets setup-go choose
-// where to put the toolchain, instead of being told with --bin-dir.
+// where the toolchain goes, rather than telling it with --bin-dir. That choice
+// depends on the executor, and a sandboxed suite never reaches it — which is
+// how a link into ~/.pyenv/shims got as far as CI.
 //
-// That choice is the whole mechanism, and it depends on the executor: ~/go/bin
-// on cimg/go, /usr/local/bin on macOS, the directory the preinstalled toolchain
-// occupies on Windows. A sandboxed suite never reaches it, which is how a link
-// into ~/.pyenv/shims and a Windows symlink that resolved GOROOT to the wrong
-// toolchain both got as far as CI.
-//
-// It changes the executor it runs on — up to taking over the `go` already
-// there — so it runs only as a step inside a job.
+// It changes the executor it runs on, up to taking over the `go` already there,
+// so it runs only inside a job.
 func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 	sdktest.SkipUnlessInJob(t)
 
 	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
 	version := acceptanceVersion()
 
-	// $BASH_ENV is the only thing redirected: the job's own is written to by
-	// CI itself, and this asserts on what setup-go put there. $HOME stays real
-	// because the choice of directory is made from it, and a job step has it.
+	// Only $BASH_ENV is redirected, since CI writes to the job's own. $HOME
+	// stays real: the choice of directory is made from it.
 	bashEnv := filepath.Join(t.TempDir(), "bash_env")
 	r := runner.New(t, binaryPath, runner.WithUnsafeAdditionalEnvVars(map[string]string{
 		"HOME":        homeDir(t),
@@ -52,10 +47,8 @@ func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 	out := r.StdoutString() + r.StderrString()
 	assert.NilError(t, err, "got: %s", out)
 
-	// The install dir goes away with the sandbox, so the links have to go with
-	// it: a dangling `go` on PATH would follow this test into the rest of the
-	// job. What a takeover displaced cannot be put back, which is the other
-	// half of why this only runs where the machine is disposable.
+	// The install dir goes away with the sandbox, so the links must too, or a
+	// dangling `go` follows this test into the rest of the job.
 	removeLinks(t, reportedLinkDir(t, out))
 
 	t.Run("ResolvesByNameInALaterStep", func(t *testing.T) {
@@ -64,8 +57,7 @@ func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
 		assertReportsVersion(t, got, version)
 	})
 
-	// The shell $BASH_ENV never reached. It passes only because the toolchain
-	// is linked into a directory PATH already holds.
+	// The shell $BASH_ENV never reached.
 	if runtime.GOOS == "windows" {
 		t.Run("ResolvesInPowerShellToo", func(t *testing.T) {
 			got, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "go version")
@@ -106,7 +98,7 @@ func removeLinks(t *testing.T, dir string) {
 }
 
 // homeDir returns the real home directory, which a job step has and the runner
-// does not pass through on its own.
+// does not pass through.
 func homeDir(t *testing.T) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
@@ -123,8 +115,7 @@ func assertReportsVersion(t *testing.T, out, want string) {
 		"expected a later step to resolve go%s, got: %s", want, out)
 }
 
-// reportedLinkDir pulls the directory setup-go says it linked into out of its
-// output, so a test can assert on a choice only the executor could have made.
+// reportedLinkDir reads back the directory setup-go says it chose.
 func reportedLinkDir(t *testing.T, out string) string {
 	t.Helper()
 	const marker = "resolve from "

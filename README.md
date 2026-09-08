@@ -18,16 +18,15 @@ nothing to source or export yourself.
 ## How it gets onto PATH
 
 A step inherits its environment from the job, not from the step before it, so
-setup-go cannot simply prepend to `PATH`. Instead it links `go` and `gofmt`
-into a directory `PATH` already holds. That reaches every later process,
-including ones that run under a shell other than bash and ones that source
-nothing at all.
+setup-go cannot just prepend to `PATH`. It links `go` and `gofmt` into a
+directory `PATH` already holds, which reaches every later process whatever
+shell it runs in.
 
-It picks that directory by preference — `$GOPATH/bin`, `~/.local/bin`,
-`~/bin`, `/usr/local/bin` — and takes over whatever `go` is already on `PATH`
-if none of those is there, so the toolchain never lands in a directory that
-belongs to some other tool. Then it asks the `go` that `PATH` resolves where
-its `GOROOT` is, and fails the step unless that is the toolchain it installed.
+The directory is chosen by preference — `$GOPATH/bin`, `~/.local/bin`,
+`~/bin`, `/usr/local/bin` — and if none of those is on `PATH` ahead of an
+existing toolchain, that toolchain is taken over instead, so the link never
+lands somewhere another tool owns. setup-go then asks the `go` that `PATH`
+resolves for its `GOROOT`, and fails unless it is the one just installed.
 
 Nothing is written to `$BASH_ENV`. If a job needs the toolchain's location
 rather than just `go`, ask the toolchain: `go env GOROOT`.
@@ -97,11 +96,10 @@ Linux, macOS and Windows, on amd64 and arm64.
 On Linux it runs on Alpine (musl) without modification, and installs `gcc` and
 `musl-dev` there so `CGO_ENABLED=1` builds work.
 
-Windows steps pick the toolchain up in any shell — bash, cmd or PowerShell.
-Where a job holds the privilege to create symlinks it gets symlinks, and where
-it does not it gets small forwarding shims instead.
+Windows steps pick the toolchain up in any shell — bash, cmd or PowerShell —
+via small forwarding shims rather than symlinks.
 
-Anything `go install` builds is reachable by name too, as long as
-`$GOPATH/bin` is on `PATH` or does not exist yet — setup-go points a missing
-one at a directory that is. A `$GOPATH/bin` that already exists and is not on
-`PATH` is left alone, and setup-go says so in its output.
+Anything `go install` builds is reachable by name too, provided `$GOPATH/bin`
+is on `PATH` or does not exist yet: setup-go points a missing one at a
+directory that is. One that already exists off `PATH` is left alone, and said
+so in the output.

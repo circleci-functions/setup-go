@@ -13,7 +13,7 @@ import (
 )
 
 // fakeGoRoot builds a GOROOT whose go reports it, so a test can assert which
-// toolchain PATH resolves to rather than only which file exists.
+// toolchain resolves, not just which file exists.
 func fakeGoRoot(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -30,9 +30,8 @@ func fakeGoRoot(t *testing.T) string {
 	return root
 }
 
-// The common case, and what cimg/go does: GOPATH/bin is on PATH ahead of the
-// toolchain the image ships, so the link goes there and the preinstalled
-// toolchain is shadowed rather than disturbed.
+// The cimg/go case: GOPATH/bin is on PATH ahead of the image's toolchain, so
+// that one is shadowed rather than disturbed.
 func TestEnsure_ShadowsThePreinstalledGoFromAPreferredDir(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	goPath, preinstalled := t.TempDir(), t.TempDir()
@@ -61,9 +60,8 @@ func TestEnsure_ShadowsThePreinstalledGoFromAPreferredDir(t *testing.T) {
 	assert.Assert(t, fi.Mode()&os.ModeSymlink == 0, "the preinstalled go must be left alone")
 }
 
-// With nothing preferred on PATH, the toolchain already there is taken over.
-// The earlier entry is writable, but a directory PATH holds that is not one of
-// the conventional bin directories belongs to some other tool.
+// With nothing preferred on PATH, the toolchain already there is taken over:
+// the writable earlier entry belongs to some other tool.
 func TestEnsure_TakesOverThePreinstalledGoWhenNothingIsPreferred(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	unrelated, preinstalled := t.TempDir(), t.TempDir()
@@ -84,10 +82,8 @@ func TestEnsure_TakesOverThePreinstalledGoWhenNothingIsPreferred(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "an unrelated directory on PATH must be left alone")
 }
 
-// Verification asks the toolchain PATH resolves where its GOROOT is, rather
-// than assuming the link it just made is the one that answers. A toolchain
-// reporting some other GOROOT stands in for anything that gets in the way:
-// PATHEXT, a directory that turns out not to be searched, a stale shim.
+// Verification asks the resolved toolchain for its GOROOT rather than assuming
+// the link it just made is what answers.
 func TestEnsure_FailsWhenTheResolvedToolchainIsNotTheOneInstalled(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	elsewhere := t.TempDir()
@@ -95,9 +91,8 @@ func TestEnsure_FailsWhenTheResolvedToolchainIsNotTheOneInstalled(t *testing.T) 
 	assert.NilError(t, os.WriteFile(filepath.Join(goroot, "bin", "go"), []byte(script), 0755))
 
 	_, err := pathlink.Ensure(pathlink.Options{GoRoot: goroot, Path: t.TempDir()})
-	// The message has to name the toolchain that answered and the GOROOT it
-	// claimed: without those, a shadowed link and a toolchain that will not
-	// answer are indistinguishable from the log.
+	// Without both, a shadowed link and a toolchain that will not answer look
+	// the same in the log.
 	assert.ErrorContains(t, err, "PATH resolves go to ")
 	assert.ErrorContains(t, err, "whose GOROOT is ")
 	assert.ErrorContains(t, err, elsewhere)
@@ -121,8 +116,7 @@ func TestEnsure_BinDirSkipsDiscoveryAndVerification(t *testing.T) {
 	assert.Equal(t, target, filepath.Join(goroot, "bin", "go"))
 }
 
-// A toolchain already resolvable — --detect-only, or a second run in one job —
-// needs no link at all.
+// Already resolvable — --detect-only, or a second run in one job.
 func TestEnsure_NoopWhenPathAlreadyResolvesToTheToolchain(t *testing.T) {
 	goroot := fakeGoRoot(t)
 
@@ -137,9 +131,8 @@ func TestEnsure_RequiresGoRoot(t *testing.T) {
 	assert.ErrorContains(t, err, "GoRoot is required")
 }
 
-// GOPATH/bin cannot hold links for binaries that do not exist yet, so when it
-// is missing it becomes the directory the toolchain was linked into — which
-// PATH does hold, so `go install` writes straight onto PATH.
+// GOPATH/bin cannot hold links for binaries that do not exist yet, so a
+// missing one becomes the directory PATH does hold.
 func TestEnsure_PointsAMissingGoPathBinAtThePathDirectory(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	early := t.TempDir()
@@ -259,9 +252,8 @@ func TestChooseDir(t *testing.T) {
 	}
 }
 
-// A version manager rewrites its shims directory whenever it rehashes, so a
-// link left there is gone by the next step. This is what the macOS executor
-// does: ~/.pyenv/shims is the first writable entry on its PATH.
+// ~/.pyenv/shims is the first writable entry on the macOS executor's PATH, and
+// pyenv rewrites it when it rehashes.
 func TestChooseDir_SkipsDirectoriesOwnedByAVersionManager(t *testing.T) {
 	dirs := []string{"/Users/distiller/.pyenv/shims", "/Users/distiller/.nvm/bin", "/usr/local/bin"}
 	anything := func(string) bool { return true }
@@ -271,8 +263,7 @@ func TestChooseDir_SkipsDirectoriesOwnedByAVersionManager(t *testing.T) {
 	assert.Assert(t, !elevate)
 }
 
-// Preference order is not consulted for a shim directory either, since the
-// caller builds that list from $HOME and GOPATH without knowing what PATH holds.
+// Nor is a shim directory reached through the preference list.
 func TestChooseDir_TakesOverTheExistingGoRatherThanAShimDir(t *testing.T) {
 	dirs := []string{"/home/u/.pyenv/shims", "/usr/local/go/bin"}
 	anything := func(string) bool { return true }
@@ -287,8 +278,7 @@ func TestPreferredDirs_PutsGoPathBinFirst(t *testing.T) {
 	assert.Equal(t, got[len(got)-1], pathlink.DefaultBinDir)
 }
 
-// The machine executor sets GOPATH to two entries. `go install` writes to the
-// first; joining "bin" onto the list would name a directory that is nobody's.
+// The machine executor sets two GOPATH entries; `go install` uses the first.
 func TestGoPathBin_TakesTheFirstEntryOfAList(t *testing.T) {
 	list := strings.Join([]string{"/home/u/.go_workspace", "/usr/local/go_workspace"},
 		string(os.PathListSeparator))
@@ -297,10 +287,8 @@ func TestGoPathBin_TakesTheFirstEntryOfAList(t *testing.T) {
 	assert.Equal(t, pathlink.GoPathBin(""), "")
 }
 
-// Linking into a directory that belongs to an unrelated runtime is what the
-// Windows executor did when nothing was preferred: C:\tools\ruby34\bin was
-// simply the first writable entry. Replacing the toolchain already on PATH is
-// both stabler and closer to what was asked for.
+// What the Windows executor did when nothing was preferred: C:\tools\ruby34\bin
+// was simply the first writable entry.
 func TestChooseDir_PrefersTakingOverTheExistingGoToAnUnrelatedDir(t *testing.T) {
 	dirs := []string{"/tools/ruby34/bin", "/usr/local/go/bin"}
 	anything := func(string) bool { return true }
@@ -322,8 +310,7 @@ func TestWritable(t *testing.T) {
 	assert.Assert(t, !pathlink.Writable(filepath.Join(dir, "child")))
 }
 
-// Taking over a directory replaces the go it holds and leaves no backup
-// behind once the link is in place.
+// Taking over a directory leaves no backup behind once the link is in place.
 func TestEnsure_ReplacesTheGoItTakesOver(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	// A directory holding a go, writable enough to be chosen but not to be
@@ -348,8 +335,7 @@ func TestEnsure_ReplacesTheGoItTakesOver(t *testing.T) {
 	assert.Assert(t, os.IsNotExist(err), "the backup must be discarded once the link is in place")
 }
 
-// A directory that cannot be written to fails before the go it holds is
-// touched, rather than deleting it and then finding out.
+// An unwritable directory fails before the go it holds is touched.
 func TestEnsure_LeavesTheOriginalIntactWhenItCannotLink(t *testing.T) {
 	goroot := fakeGoRoot(t)
 	dir := t.TempDir()

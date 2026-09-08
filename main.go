@@ -1,6 +1,5 @@
-// Command setup-go installs a Go toolchain and links it onto PATH so
-// subsequent steps in the same job pick it up automatically, whatever shell
-// they run in.
+// Command setup-go installs a Go toolchain and links it onto PATH, so later
+// steps in the job pick it up whatever shell they run in.
 //
 // Supported platforms: linux, darwin, windows.
 package main
@@ -67,8 +66,8 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 		return err
 	}
 
-	// The toolchain just installed, not whatever is on PATH: until pathlink
-	// runs, `go` still resolves to the one the image shipped, if any.
+	// The toolchain just installed: until pathlink runs, `go` still resolves to
+	// whatever the image shipped.
 	goBinary := filepath.Join(goroot, "bin", install.GoBinary())
 	env, err := goenv.LoadFrom(ctx, goBinary)
 	if err != nil {

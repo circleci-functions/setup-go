@@ -18,9 +18,8 @@ executors:
   base:
     docker:
       - image: cimg/base:stable
-  # The smoke jobs below cover the executors a docker image cannot stand in
-  # for: a VM with a root-owned preinstalled toolchain, and the two platforms
-  # where PATH and linking work differently from Linux.
+  # For the smoke jobs: a VM with a root-owned preinstalled toolchain, and the
+  # two platforms where PATH and linking differ from Linux.
   machine:
     machine:
       image: ubuntu-2404:current
@@ -36,9 +35,9 @@ executors:
 commands:
   assert-installed-go-resolves:
     description: >-
-      Fails unless a step running after the install resolves `go` by name, to
-      the version that was asked for. Nothing is sourced here on purpose: this
-      passes only if the toolchain is reachable through PATH itself.
+      Fails unless a step after the install resolves `go` by name, to the
+      version asked for. Nothing is sourced, so it passes only if the toolchain
+      is reachable through PATH itself.
     steps:
       - run:
           name: A later step resolves the installed go
@@ -52,8 +51,8 @@ commands:
 
   assert-nothing-exported:
     description: >-
-      Fails if setup-go wrote a PATH export to $BASH_ENV. Sourcing a file is
-      what tied the old implementation to bash; nothing should need it now.
+      Fails if setup-go wrote a PATH export to $BASH_ENV. Nothing should need
+      sourcing now.
     steps:
       - run:
           name: $BASH_ENV holds no PATH export
@@ -135,9 +134,8 @@ jobs:
       - assert-installed-go-resolves
       - assert-nothing-exported
 
-  # Every executor where PATH is arranged differently, each asserting the same
-  # thing in a step after the install: `go` resolves by name, to the version
-  # asked for, with nothing sourced from a shell.
+  # Each executor arranges PATH differently; all assert the same thing in a
+  # step after the install.
   smoke-preinstalled:
     executor: go
     steps:
@@ -181,8 +179,7 @@ jobs:
           command: ./dist/setup-go/windows/amd64/setup-go.exe --version << pipeline.parameters.go-version >>
       - assert-installed-go-resolves
       - assert-nothing-exported
-      # The shell $BASH_ENV never reached. Nothing is sourced here, so this
-      # passes only because the toolchain is linked into a directory on PATH.
+      # The shell $BASH_ENV never reached.
       - run:
           name: A later step in another shell resolves it too
           shell: powershell.exe -ExecutionPolicy Bypass
