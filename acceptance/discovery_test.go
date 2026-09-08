@@ -1,0 +1,138 @@
+//go:build acceptance
+
+package setupgo_test
+
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"gotest.tools/v3/assert"
+
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
+	"github.com/circleci-functions/toolkit/testing/runner"
+)
+
+// TestAcceptance_LinksOntoTheRealPath is the one test that lets setup-go choose
+// where to put the toolchain, instead of being told with --bin-dir.
+//
+// That choice is the whole mechanism, and it depends on the executor: ~/go/bin
+// on cimg/go, /usr/local/bin on macOS, the directory the preinstalled toolchain
+// occupies on Windows. A sandboxed suite never reaches it, which is how a link
+// into ~/.pyenv/shims and a Windows symlink that resolved GOROOT to the wrong
+// toolchain both got as far as CI.
+//
+// It changes the executor it runs on — up to taking over the `go` already
+// there — so it runs only as a step inside a job.
+func TestAcceptance_LinksOntoTheRealPath(t *testing.T) {
+	sdktest.SkipUnlessInJob(t)
+
+	s := sdktest.NewSandbox(t, sdktest.WithLiveCache())
+	version := acceptanceVersion()
+
+	// $BASH_ENV is the only thing redirected: the job's own is written to by
+	// CI itself, and this asserts on what setup-go put there. $HOME stays real
+	// because the choice of directory is made from it, and a job step has it.
+	bashEnv := filepath.Join(t.TempDir(), "bash_env")
+	r := runner.New(t, binaryPath, runner.WithUnsafeAdditionalEnvVars(map[string]string{
+		"HOME":        homeDir(t),
+		"USERPROFILE": homeDir(t),
+		"BASH_ENV":    bashEnv,
+		"GOROOT":      "",
+	}))
+
+	_, err := r.Run(
+		"--version", version,
+		"--install-dir", s.InstallDir,
+		"--cache-nonce", s.CacheKeyNonce,
+		"--checksum", s.CacheKeyNonce,
+	)
+	out := r.StdoutString() + r.StderrString()
+	assert.NilError(t, err, "got: %s", out)
+
+	// The install dir goes away with the sandbox, so the links have to go with
+	// it: a dangling `go` on PATH would follow this test into the rest of the
+	// job. What a takeover displaced cannot be put back, which is the other
+	// half of why this only runs where the machine is disposable.
+	removeLinks(t, reportedLinkDir(t, out))
+
+	t.Run("ResolvesByNameInALaterStep", func(t *testing.T) {
+		got, err := sdktest.LaterStep(t, "go", "version")
+		assert.NilError(t, err, "a later step could not resolve go: %s", got)
+		assertReportsVersion(t, got, version)
+	})
+
+	// The shell $BASH_ENV never reached. It passes only because the toolchain
+	// is linked into a directory PATH already holds.
+	if runtime.GOOS == "windows" {
+		t.Run("ResolvesInPowerShellToo", func(t *testing.T) {
+			got, err := sdktest.LaterStep(t, "powershell.exe", "-Command", "go version")
+			assert.NilError(t, err, "PowerShell could not resolve go: %s", got)
+			assertReportsVersion(t, got, version)
+		})
+	}
+
+	t.Run("NothingIsExportedToAShell", func(t *testing.T) {
+		content, err := os.ReadFile(bashEnv) //nolint:gosec // a path this test chose
+		if os.IsNotExist(err) {
+			return
+		}
+		assert.NilError(t, err)
+		assert.Assert(t, !strings.Contains(string(content), "export PATH="),
+			"the toolchain goes on PATH by being linked there, so nothing should be exported: %s", content)
+	})
+
+	t.Run("NotIntoADirectoryOwnedByAnotherTool", func(t *testing.T) {
+		dir := reportedLinkDir(t, out)
+		for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+			assert.Assert(t, part != "shims",
+				"a version manager rewrites its shims directory, taking the link with it: %s", dir)
+		}
+	})
+}
+
+// removeLinks takes the toolchain back off PATH at the end of the test.
+func removeLinks(t *testing.T, dir string) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, name := range []string{"go", "gofmt"} {
+			for _, ext := range []string{"", ".exe", ".bat"} {
+				_ = os.Remove(filepath.Join(dir, name+ext))
+			}
+		}
+	})
+}
+
+// homeDir returns the real home directory, which a job step has and the runner
+// does not pass through on its own.
+func homeDir(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	assert.NilError(t, err)
+	return home
+}
+
+func assertReportsVersion(t *testing.T, out, want string) {
+	t.Helper()
+	if want == "stable" || want == "latest" {
+		return
+	}
+	assert.Assert(t, strings.Contains(out, "go"+want),
+		"expected a later step to resolve go%s, got: %s", want, out)
+}
+
+// reportedLinkDir pulls the directory setup-go says it linked into out of its
+// output, so a test can assert on a choice only the executor could have made.
+func reportedLinkDir(t *testing.T, out string) string {
+	t.Helper()
+	const marker = "resolve from "
+	for line := range strings.SplitSeq(out, "\n") {
+		if _, dir, found := strings.Cut(line, marker); found {
+			return strings.TrimSpace(dir)
+		}
+	}
+	t.Fatalf("setup-go did not report where it linked the toolchain:\n%s", out)
+	return ""
+}
