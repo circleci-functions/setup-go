@@ -8,7 +8,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,15 +45,10 @@ func AlreadyInstalled(installDir string, v goversion.Version) bool {
 	return strings.Contains(string(out), v.Name)
 }
 
-// DefaultBinDir is where go/gofmt are symlinked by default so they're on
-// PATH even for processes that don't source $BASH_ENV.
-const DefaultBinDir = "/usr/local/bin"
-
 // Ensure returns the GOROOT for v, installing it if not already present.
 // If detectOnly is true, it returns the GOROOT of the go binary already on PATH
-// without downloading anything. binDir is where go/gofmt are symlinked to
-// on a fresh install; see symlinkGoBinaries.
-func Ensure(ctx context.Context, v goversion.Version, installDir, binDir string, detectOnly bool) (string, error) {
+// without downloading anything.
+func Ensure(ctx context.Context, v goversion.Version, installDir string, detectOnly bool) (string, error) {
 	if detectOnly {
 		p, err := exec.LookPath("go")
 		if err != nil {
@@ -68,7 +62,7 @@ func Ensure(ctx context.Context, v goversion.Version, installDir, binDir string,
 		return goroot, nil
 	}
 	fmt.Fprintf(os.Stderr, "setup-go: installing %s into %s\n", v.Name, installDir)
-	return Install(ctx, v, installDir, binDir)
+	return Install(ctx, v, installDir)
 }
 
 type EnsureCachedOptions struct {
@@ -78,10 +72,6 @@ type EnsureCachedOptions struct {
 	// CacheNonce partitions the toolchain cache. Only the acceptance suite
 	// sets it, so a run cannot restore an earlier run's toolchain.
 	CacheNonce string
-	// BinDir is where go/gofmt are symlinked on a fresh install, so they're
-	// on PATH even for processes that don't source $BASH_ENV. Defaults to
-	// DefaultBinDir when empty.
-	BinDir string
 }
 
 // EnsureCached is like Ensure but attempts to restore the toolchain from cache
@@ -91,13 +81,8 @@ type EnsureCachedOptions struct {
 // When NoCache or DetectOnly is set, or the toolchain is already locally
 // installed, it delegates straight to Ensure with no cache calls.
 func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, options EnsureCachedOptions) (string, error) {
-	binDir := options.BinDir
-	if binDir == "" {
-		binDir = DefaultBinDir
-	}
-
 	if options.NoCache || options.DetectOnly || AlreadyInstalled(options.InstallDir, v) {
-		return Ensure(ctx, v, options.InstallDir, binDir, options.DetectOnly)
+		return Ensure(ctx, v, options.InstallDir, options.DetectOnly)
 	}
 
 	key := toolchainCacheKey(v, options.CacheNonce)
@@ -110,7 +95,7 @@ func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, 
 		return goroot, nil
 	}
 
-	goroot, err := Install(ctx, v, options.InstallDir, binDir)
+	goroot, err := Install(ctx, v, options.InstallDir)
 	if err != nil {
 		return "", err
 	}
@@ -131,9 +116,10 @@ func toolchainCacheKey(v goversion.Version, nonce string) string {
 }
 
 // Install downloads the Go archive for v, verifies its sha256, extracts it under
-// installDir, and returns the GOROOT path (installDir/v.Name). It also symlinks
-// go/gofmt into binDir; see symlinkGoBinaries.
-func Install(ctx context.Context, v goversion.Version, installDir, binDir string) (string, error) {
+// installDir, and returns the GOROOT path (installDir/v.Name). Putting the
+// toolchain on PATH is the pathlink package's job, and happens on every run
+// rather than only on a fresh install.
+func Install(ctx context.Context, v goversion.Version, installDir string) (string, error) {
 	dldr, err := download.NewDownloader(ctx, 30*time.Minute, installDir)
 	if err != nil {
 		return "", fmt.Errorf("create downloader: %w", err)
@@ -161,34 +147,7 @@ func Install(ctx context.Context, v goversion.Version, installDir, binDir string
 	}
 	_ = os.Remove(archivePath)
 
-	symlinkGoBinaries(goroot, binDir)
-
 	return goroot, nil
-}
-
-// symlinkGoBinaries symlinks go and gofmt from goroot/bin into binDir so
-// they're on PATH for processes that don't source $BASH_ENV. If binDir is
-// not writable, it retries with sudo (needed on machine executors where
-// DefaultBinDir requires root); if that also fails, it logs and moves on.
-func symlinkGoBinaries(goroot, binDir string) {
-	if runtime.GOOS == "windows" {
-		return
-	}
-	for _, name := range []string{"go", "gofmt"} {
-		src := filepath.Join(goroot, "bin", name)
-		dst := filepath.Join(binDir, name)
-		_ = os.Remove(dst)
-		if err := os.Symlink(src, dst); err != nil {
-			if !errors.Is(err, os.ErrPermission) {
-				fmt.Fprintf(os.Stderr, "setup-go: symlink %s: %v\n", dst, err)
-				continue
-			}
-			// binDir is not writable (machine executor); retry with sudo.
-			if out, sudoErr := exec.Command("sudo", "ln", "-sf", src, dst).CombinedOutput(); sudoErr != nil {
-				fmt.Fprintf(os.Stderr, "setup-go: symlink %s: %s\n", dst, strings.TrimSpace(string(out)))
-			}
-		}
-	}
 }
 
 func verifySHA256(path, wantHex string) error {

@@ -10,8 +10,6 @@ import (
 	"testing"
 
 	"gotest.tools/v3/assert"
-
-	"github.com/circleci-functions/toolkit/bashenv"
 )
 
 // acceptanceVersion returns the Go version to install: SETUP_GO_ACCEPTANCE_VERSION
@@ -41,15 +39,13 @@ func TestAcceptance_Smoke(t *testing.T) {
 		"--checksum", s.CacheKeyNonce,
 	}
 
-	var goBinDir string
 	if !t.Run("InstallGo_Cold", func(t *testing.T) {
 		out, err := run(t, nil, installArgs...)
 		assert.NilError(t, err, "got: %s", out)
 		assert.Assert(t, !strings.Contains(out, "restored from cache"),
 			"a per-run nonce must miss the cache, so this step downloads for real; got: %s", out)
 
-		goBinDir = installedGoBinDir(t, s.BashEnv, s.InstallDir)
-		assertGoVersion(t, goBinDir, version)
+		assertLinkedGoVersion(t, s.BinDir, s.InstallDir, version)
 	}) {
 		t.Fatal("cold install failed; aborting remaining steps")
 	}
@@ -62,27 +58,38 @@ func TestAcceptance_Smoke(t *testing.T) {
 		out, err := run(t, nil, installArgs...)
 		assert.NilError(t, err, "got: %s", out)
 		assert.Assert(t, strings.Contains(out, "restored from cache"), "expected a cache hit, got: %s", out)
-		assertGoVersion(t, installedGoBinDir(t, s.BashEnv, s.InstallDir), version)
+		assertLinkedGoVersion(t, s.BinDir, s.InstallDir, version)
 	}) {
 		t.Fatal("cache-hit install failed; aborting remaining steps")
 	}
 
-	t.Run("BashEnv_SourcesIntoALaterStep", func(t *testing.T) {
-		assertBashEnvPutsGoOnPath(t, s.BashEnv, goBinDir)
+	t.Run("NothingIsExportedToAShell", func(t *testing.T) {
+		_, err := os.Stat(s.BashEnv)
+		assert.Assert(t, os.IsNotExist(err),
+			"the toolchain goes on PATH by being linked there, so $BASH_ENV must be untouched; got %v", err)
+	})
+
+	t.Run("ResolvesByNameInALaterStep", func(t *testing.T) {
+		assertResolvesFromPath(t, s.BinDir, version)
 	})
 }
 
-// installedGoBinDir returns the bin directory setup-go prepended to PATH,
-// asserting it points inside the sandbox rather than at a preinstalled Go.
-func installedGoBinDir(t *testing.T, bashEnvFile, installDir string) string {
+// assertLinkedGoVersion checks the link setup-go made points at the toolchain
+// it installed, rather than at a Go the executor happened to ship.
+//
+// The suite passes --bin-dir, so the link lands in the sandbox instead of a
+// directory on the real PATH. That is what makes the suite safe to run on a
+// laptop; the CI smoke jobs cover the discovery it skips.
+func assertLinkedGoVersion(t *testing.T, binDir, installDir, want string) {
 	t.Helper()
-	path, err := bashenv.Path(bashEnvFile)
-	assert.NilError(t, err)
 
-	first, _, _ := strings.Cut(path, string(os.PathListSeparator))
-	assert.Assert(t, strings.HasPrefix(first, installDir),
-		"expected $BASH_ENV to prepend a bin dir under %s, got %q", installDir, first)
-	return first
+	linked := filepath.Join(binDir, "go")
+	target, err := os.Readlink(linked)
+	assert.NilError(t, err, "expected setup-go to link go into %s", binDir)
+	assert.Assert(t, strings.HasPrefix(target, installDir),
+		"expected the link to point inside %s, got %q", installDir, target)
+
+	assertGoVersion(t, filepath.Dir(linked), want)
 }
 
 func assertGoVersion(t *testing.T, goBinDir, want string) {
@@ -95,24 +102,23 @@ func assertGoVersion(t *testing.T, goBinDir, want string) {
 	}
 }
 
-// assertBashEnvPutsGoOnPath sources $BASH_ENV in a real shell and resolves `go`
-// from it, which is what a later job step does. bashenv.Path parses the file;
-// this checks a shell agrees, so a quoting or ordering mistake that the parser
-// tolerates still fails here.
+// assertResolvesFromPath runs `go version` in a shell that has binDir on PATH
+// and nothing sourced, which is what a later job step gets once setup-go has
+// linked the toolchain into a directory PATH already holds.
 //
-// The bare-smoke CI job covers the same contract end to end, with a real job
-// runner sourcing the file between two steps. This is the local proxy for it.
-func assertBashEnvPutsGoOnPath(t *testing.T, bashEnvFile, wantGoBinDir string) {
+// The bare-smoke and cross-platform CI jobs cover the same contract end to
+// end, with a real job runner between two steps and no --bin-dir. This is the
+// local proxy for them.
+func assertResolvesFromPath(t *testing.T, binDir, want string) {
 	t.Helper()
 
-	script := `set -e; . "$BASH_ENV"; command -v go`
-	cmd := exec.CommandContext(t.Context(), "bash", "-c", script) //nolint:gosec
-	cmd.Env = append(os.Environ(), "BASH_ENV="+bashEnvFile)
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", "go version")
+	cmd.Env = append(os.Environ(), "PATH="+binDir, "GOROOT=")
 
 	out, err := cmd.CombinedOutput()
-	assert.NilError(t, err, "sourcing $BASH_ENV and resolving go failed: %s", out)
-
-	resolved := strings.TrimSpace(string(out))
-	assert.Equal(t, filepath.Dir(resolved), wantGoBinDir,
-		"expected a later step to resolve go to the toolchain just installed, got %q", resolved)
+	assert.NilError(t, err, "resolving go from PATH alone failed: %s", out)
+	if want != "stable" && want != "latest" {
+		assert.Assert(t, strings.Contains(string(out), "go"+want),
+			"expected a later step to resolve go%s, got: %s", want, out)
+	}
 }

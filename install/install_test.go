@@ -49,7 +49,7 @@ func TestInstall_GoodChecksum(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	goroot, err := install.Install(context.Background(), v, dir, t.TempDir())
+	goroot, err := install.Install(context.Background(), v, dir)
 	assert.NilError(t, err)
 	assert.Equal(t, goroot, filepath.Join(dir, "go1.22.3"))
 
@@ -59,34 +59,6 @@ func TestInstall_GoodChecksum(t *testing.T) {
 			fs.WithFile("go", fakeGoBin, fs.WithMode(0755))),
 		fs.WithFile("VERSION", "go1.22.3\n", fs.WithMode(0644)),
 	)))
-}
-
-// TestInstall_SymlinksGoBinaries verifies that Install symlinks go/gofmt
-// into binDir, without ever touching the real DefaultBinDir.
-func TestInstall_SymlinksGoBinaries(t *testing.T) {
-	tarball := fakegodev.BuildTarball(t, "go1.22.3", fakeGoBin)
-	ts := fakegodev.New(t, nil, map[string][]byte{
-		"/go1.22.3.linux-amd64.tar.gz": tarball,
-	})
-
-	v := goversion.Version{
-		Name:   "go1.22.3",
-		Short:  "1.22.3",
-		URL:    ts.URL + "/go1.22.3.linux-amd64.tar.gz",
-		SHA256: sha256Hex(tarball),
-		Stable: true,
-	}
-
-	binDir := t.TempDir()
-	goroot, err := install.Install(context.Background(), v, t.TempDir(), binDir)
-	assert.NilError(t, err)
-
-	if runtime.GOOS == "windows" {
-		return
-	}
-	target, err := os.Readlink(filepath.Join(binDir, "go"))
-	assert.NilError(t, err)
-	assert.Equal(t, target, filepath.Join(goroot, "bin", "go"))
 }
 
 func TestInstall_Errors(t *testing.T) {
@@ -123,7 +95,7 @@ func TestInstall_Errors(t *testing.T) {
 				URL:    ts.URL + "/go1.22.3.linux-amd64.tar.gz",
 				SHA256: tc.sha256,
 			}
-			_, err := install.Install(context.Background(), v, t.TempDir(), t.TempDir())
+			_, err := install.Install(context.Background(), v, t.TempDir())
 			assert.ErrorContains(t, err, tc.wantErr)
 		})
 	}
@@ -146,7 +118,7 @@ func TestInstallZip_GoodChecksum(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	goroot, err := install.Install(context.Background(), v, dir, t.TempDir())
+	goroot, err := install.Install(context.Background(), v, dir)
 	assert.NilError(t, err)
 	assert.Equal(t, goroot, filepath.Join(dir, "go1.22.3"))
 
@@ -169,7 +141,7 @@ func TestInstall_ZipErrors(t *testing.T) {
 		URL:    ts.URL + "/go1.22.3.windows-amd64.zip",
 		SHA256: sha256Hex(traversalZip),
 	}
-	_, err := install.Install(context.Background(), v, t.TempDir(), t.TempDir())
+	_, err := install.Install(context.Background(), v, t.TempDir())
 	assert.ErrorContains(t, err, "illegal path")
 }
 
@@ -185,7 +157,7 @@ func TestEnsure(t *testing.T) {
 		}
 		t.Setenv("PATH", binDir)
 		v := goversion.Version{Name: "go1.22.3"}
-		goroot, err := install.Ensure(context.Background(), v, "", "", true)
+		goroot, err := install.Ensure(context.Background(), v, "", true)
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, tmp)
 	})
@@ -193,7 +165,7 @@ func TestEnsure(t *testing.T) {
 	t.Run("detect-only no go on PATH", func(t *testing.T) {
 		t.Setenv("PATH", "")
 		v := goversion.Version{Name: "go1.22.3"}
-		_, err := install.Ensure(context.Background(), v, "", "", true)
+		_, err := install.Ensure(context.Background(), v, "", true)
 		assert.ErrorContains(t, err, "no 'go' binary found on PATH")
 	})
 
@@ -208,7 +180,7 @@ func TestEnsure(t *testing.T) {
 			t.Fatal(err)
 		}
 		v := goversion.Version{Name: "go1.22.3"}
-		goroot, err := install.Ensure(context.Background(), v, installDir, "", false)
+		goroot, err := install.Ensure(context.Background(), v, installDir, false)
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, filepath.Join(installDir, "go1.22.3"))
 	})
@@ -226,7 +198,7 @@ func TestEnsure(t *testing.T) {
 			Stable: true,
 		}
 		installDir := t.TempDir()
-		goroot, err := install.Ensure(context.Background(), v, installDir, t.TempDir(), false)
+		goroot, err := install.Ensure(context.Background(), v, installDir, false)
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, filepath.Join(installDir, "go1.22.3"))
 		_, statErr := os.Stat(filepath.Join(goroot, "bin", "go"))
@@ -279,7 +251,6 @@ func TestEnsureCached_CacheErrorIsNonFatal(t *testing.T) {
 
 			goroot, err := install.EnsureCached(context.Background(), tc.makeClient(t), v, install.EnsureCachedOptions{
 				InstallDir: installDir,
-				BinDir:     t.TempDir(),
 			})
 			assert.NilError(t, err)
 			assert.Equal(t, goroot, filepath.Join(installDir, version))
@@ -327,7 +298,6 @@ func TestEnsureCached_NoCache_SkipsCacheCalls(t *testing.T) {
 	srv := sdktest.NewServer(t)
 	_, err := install.EnsureCached(context.Background(), srv.Client(), v, install.EnsureCachedOptions{
 		InstallDir: t.TempDir(),
-		BinDir:     t.TempDir(),
 		NoCache:    true,
 	})
 	assert.NilError(t, err)

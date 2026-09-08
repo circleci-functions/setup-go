@@ -18,6 +18,52 @@ executors:
   base:
     docker:
       - image: cimg/base:stable
+  # The smoke jobs below cover the executors a docker image cannot stand in
+  # for: a VM with a root-owned preinstalled toolchain, and the two platforms
+  # where PATH and linking work differently from Linux.
+  machine:
+    machine:
+      image: ubuntu-2404:current
+  macos:
+    macos:
+      xcode: 16.2.0
+    resource_class: macos.m1.medium.gen1
+  windows:
+    machine:
+      image: windows-server-2022-gui:current
+      shell: bash.exe -eo pipefail
+    resource_class: windows.medium
+
+commands:
+  assert-installed-go-resolves:
+    description: >-
+      Fails unless a step running after the install resolves `go` by name, to
+      the version that was asked for. Nothing is sourced here on purpose: this
+      passes only if the toolchain is reachable through PATH itself.
+    steps:
+      - run:
+          name: A later step resolves the installed go
+          command: |
+            command -v go
+            go version
+            case "$(go version)" in
+              *"go<< pipeline.parameters.go-version >> "*) ;;
+              *) echo "expected go<< pipeline.parameters.go-version >>, got $(go version)" >&2; exit 1 ;;
+            esac
+
+  assert-nothing-exported:
+    description: >-
+      Fails if setup-go wrote a PATH export to $BASH_ENV. Sourcing a file is
+      what tied the old implementation to bash; nothing should need it now.
+    steps:
+      - run:
+          name: $BASH_ENV holds no PATH export
+          command: |
+            if [ -f "$BASH_ENV" ] && grep -q '^export PATH=' "$BASH_ENV"; then
+              echo "setup-go exported PATH to \$BASH_ENV:" >&2
+              cat "$BASH_ENV" >&2
+              exit 1
+            fi
 
 jobs:
   test:
@@ -87,7 +133,66 @@ jobs:
       - run:
           name: Install Go from nothing
           command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
-      - run: go version
+      - assert-installed-go-resolves
+      - assert-nothing-exported
+
+  # Every executor where PATH is arranged differently, each asserting the same
+  # thing in a step after the install: `go` resolves by name, to the version
+  # asked for, with nothing sourced from a shell.
+  smoke-preinstalled:
+    executor: go
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Go over the one the image ships
+          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
+      - assert-installed-go-resolves
+      - assert-nothing-exported
+
+  smoke-machine:
+    executor: machine
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Go on a VM
+          command: ./dist/setup-go/linux/amd64/setup-go --version << pipeline.parameters.go-version >>
+      - assert-installed-go-resolves
+      - assert-nothing-exported
+
+  smoke-macos:
+    executor: macos
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Go on macOS
+          command: ./dist/setup-go/darwin/arm64/setup-go --version << pipeline.parameters.go-version >>
+      - assert-installed-go-resolves
+      - assert-nothing-exported
+
+  smoke-windows:
+    executor: windows
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Install Go on Windows
+          command: ./dist/setup-go/windows/amd64/setup-go.exe --version << pipeline.parameters.go-version >>
+      - assert-installed-go-resolves
+      - assert-nothing-exported
+      # The shell $BASH_ENV never reached. Nothing is sourced here, so this
+      # passes only because the toolchain is linked into a directory on PATH.
+      - run:
+          name: A later step in another shell resolves it too
+          shell: powershell.exe -ExecutionPolicy Bypass
+          command: |
+            go version
+            if (-not (go version | Select-String -SimpleMatch "go<< pipeline.parameters.go-version >>")) {
+              Write-Error "expected go<< pipeline.parameters.go-version >>"
+              exit 1
+            }
 
   publish:
     executor: go
@@ -128,6 +233,26 @@ workflows:
             tags:
               only: /.*/
       - bare-smoke:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-preinstalled:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-machine:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-macos:
+          requires: [build]
+          filters:
+            tags:
+              only: /.*/
+      - smoke-windows:
           requires: [build]
           filters:
             tags:

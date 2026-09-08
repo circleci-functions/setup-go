@@ -1,7 +1,8 @@
-// Command setup-go installs a Go toolchain and prepends it to PATH via
-// $BASH_ENV so subsequent steps in the same job pick it up automatically.
+// Command setup-go installs a Go toolchain and links it onto PATH so
+// subsequent steps in the same job pick it up automatically, whatever shell
+// they run in.
 //
-// Supported platforms: linux, darwin, windows (MSYS2/Git Bash).
+// Supported platforms: linux, darwin, windows.
 package main
 
 import (
@@ -20,7 +21,7 @@ import (
 	"github.com/circleci-functions/setup-go/goenv"
 	"github.com/circleci-functions/setup-go/goversion"
 	"github.com/circleci-functions/setup-go/install"
-	"github.com/circleci-functions/setup-go/jobenv"
+	"github.com/circleci-functions/setup-go/pathlink"
 )
 
 type cli struct {
@@ -29,7 +30,7 @@ type cli struct {
 	DetectOnly  bool   `help:"Detect and export env using the Go already on PATH, without installing."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
 	APIURL      string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
-	BinDir      string `name:"bin-dir" help:"Override the directory go/gofmt are symlinked into." hidden:"" default:""`
+	BinDir      string `name:"bin-dir" help:"Link go/gofmt into this directory instead of discovering one on PATH." hidden:"" default:""`
 	CacheNonce  string `name:"cache-nonce" help:"Partition the toolchain cache, so a test run cannot restore an earlier run's toolchain." hidden:"" default:""`
 
 	Cache             bool   `help:"Use the job cache: restore the selected caches up front and save them at the end of the job. Set to false to disable all caching, including the toolchain cache." default:"true"`
@@ -59,7 +60,6 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 	goroot, err := install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
 		InstallDir: expandHome(c.InstallDir),
 		DetectOnly: c.DetectOnly,
-		BinDir:     c.BinDir,
 		NoCache:    !c.Cache,
 		CacheNonce: c.CacheNonce,
 	})
@@ -67,36 +67,34 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 		return err
 	}
 
+	// The toolchain just installed, not whatever is on PATH: until pathlink
+	// runs, `go` still resolves to the one the image shipped, if any.
 	goBinary := filepath.Join(goroot, "bin", install.GoBinary())
-	goPath, err := jobenv.DetectGoPath(ctx, goBinary)
+	env, err := goenv.LoadFrom(ctx, goBinary)
 	if err != nil {
-		return fmt.Errorf("detect go path: %w", err)
+		return err
 	}
 
-	if err := jobenv.WriteEnv(goPath, filepath.Join(goroot, "bin")); err != nil {
-		return fmt.Errorf("write env: %w", err)
+	linked, err := pathlink.Ensure(pathlink.Options{
+		GoRoot: goroot,
+		GoPath: env.GOPATH,
+		BinDir: c.BinDir,
+	})
+	if err != nil {
+		return err
 	}
-	fmt.Fprintf(os.Stderr, "setup-go: wrote env exports to %s\n", os.Getenv("BASH_ENV"))
+	fmt.Fprintf(os.Stderr, "setup-go: go and gofmt resolve from %s\n", linked.Dir)
+
 	_ = cgoalpine.InstallToolchain(ctx, cgoalpine.DefaultOSReleasePath)
 
-	return c.setupJobCaches(ctx, client, goBinary)
+	return c.setupJobCaches(ctx, client, env)
 }
 
 // setupJobCaches restores the selected caches and registers their saves for the
 // end of the job, so the steps in between need no cache steps of their own.
-func (c *cli) setupJobCaches(ctx context.Context, client *sdk.Client, goBinary string) error {
+func (c *cli) setupJobCaches(ctx context.Context, client *sdk.Client, env *goenv.GoEnv) error {
 	if !c.Cache {
 		return nil
-	}
-
-	var env *goenv.GoEnv
-	if c.GoModCache || c.BuildCache {
-		// The go just installed, not whatever is on PATH: WriteEnv above only
-		// takes effect for later steps.
-		var err error
-		if env, err = goenv.LoadFrom(ctx, goBinary); err != nil {
-			return err
-		}
 	}
 
 	if c.GoModCache {
@@ -138,7 +136,7 @@ func run(ctx context.Context, client *sdk.Client) error {
 	var flags cli
 	kCtx := kong.Parse(&flags,
 		kong.Name("setup-go"),
-		kong.Description("Install a Go toolchain and prepend it to PATH via $BASH_ENV.\n\nExample:\n  circleci run setup-go@<version> -- --version 1.22"),
+		kong.Description("Install a Go toolchain and link it onto PATH for later steps.\n\nExample:\n  circleci run setup-go@<version> -- --version 1.22"),
 		kong.UsageOnError(),
 		functionyaml.Embed(),
 	)
