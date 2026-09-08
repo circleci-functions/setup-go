@@ -68,21 +68,21 @@ func Ensure(opts Options) (Result, error) {
 		if err := linkInto(opts.BinDir, opts.GoRoot, false); err != nil {
 			return Result{}, err
 		}
-		reportGoPathBin(opts.GoPath, opts.BinDir, dirs)
+		reportGoPathBin(opts.GoPath, opts.BinDir, dirs, false)
 		return Result{Dir: opts.BinDir}, nil
 	}
 
 	// Already resolvable: --detect-only, or GOROOT/bin is itself on PATH.
 	if dir, ok := resolves(dirs, opts.GoRoot); ok {
-		reportGoPathBin(opts.GoPath, dir, dirs)
+		reportGoPathBin(opts.GoPath, dir, dirs, false)
 		return Result{Dir: dir, Verified: true}, nil
 	}
 
-	dir, elevate := ChooseDir(dirs, IndexOfGo(dirs), Writable)
+	dir, elevate := ChooseDir(dirs, IndexOfGo(dirs), PreferredDirs(opts.GoPath), Writable)
 	if err := linkInto(dir, opts.GoRoot, elevate); err != nil {
 		return Result{}, err
 	}
-	reportGoPathBin(opts.GoPath, dir, dirs)
+	reportGoPathBin(opts.GoPath, dir, dirs, elevate)
 
 	if _, ok := resolves(dirs, opts.GoRoot); !ok {
 		return Result{Dir: dir}, fmt.Errorf(
@@ -121,21 +121,31 @@ func IndexOfGo(dirs []string) int {
 	return -1
 }
 
-// ChooseDir picks the directory to link into: the earliest writable entry that
-// comes before the `go` already on PATH, so the link wins the lookup and a
-// preinstalled toolchain is shadowed rather than disturbed. Failing that it
-// takes over that `go` where it stands, which needs elevation if the directory
-// holding it is root-owned.
+// ChooseDir picks the directory to link into, in order of preference rather
+// than PATH order: a job's PATH holds directories that belong to other tools,
+// and a version manager rewrites its shims whenever it rehashes, taking a link
+// left there with it. preferred names the directories conventionally meant for
+// this — GOPATH/bin, a user bin directory, /usr/local/bin — and any of them
+// that is on PATH is a better bet than whatever happens to come first.
 //
-// existing is the index ChooseDir must get ahead of, or -1 when PATH holds no
-// go at all — in which case any writable entry will do.
-func ChooseDir(dirs []string, existing int, writable func(string) bool) (dir string, elevate bool) {
-	limit := len(dirs)
-	if existing >= 0 {
-		limit = existing
+// Whatever it picks has to come before the `go` already on PATH, or the link
+// would be shadowed by it; failing that it takes over that `go` where it
+// stands, which needs elevation if the directory holding it is root-owned.
+//
+// existing is the index the choice must get ahead of, or -1 when PATH holds no
+// go at all — in which case anything on PATH will do.
+func ChooseDir(dirs []string, existing int, preferred []string, writable func(string) bool) (dir string, elevate bool) {
+	// -1 means the directory is not on PATH at all, so a link there resolves
+	// for nobody.
+	ahead := func(i int) bool { return i >= 0 && (existing < 0 || i < existing) }
+
+	for _, p := range preferred {
+		if i := indexOfDir(dirs, p); ahead(i) && writable(p) {
+			return p, false
+		}
 	}
-	for _, d := range dirs[:limit] {
-		if writable(d) {
+	for i, d := range dirs {
+		if ahead(i) && !managed(d) && writable(d) {
 			return d, false
 		}
 	}
@@ -143,6 +153,43 @@ func ChooseDir(dirs []string, existing int, writable func(string) bool) (dir str
 		return dirs[existing], !writable(dirs[existing])
 	}
 	return DefaultBinDir, !writable(DefaultBinDir)
+}
+
+// PreferredDirs returns the directories worth linking into ahead of anything
+// else PATH offers, best first. GOPATH/bin comes first because the Go
+// toolchain already writes there, so nothing else is going to reorganise it.
+func PreferredDirs(goPath string) []string {
+	var dirs []string
+	if goPath != "" {
+		dirs = append(dirs, filepath.Join(goPath, "bin"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".local", "bin"), filepath.Join(home, "bin"))
+	}
+	return append(dirs, DefaultBinDir)
+}
+
+// managed reports whether dir belongs to a tool that rewrites its contents.
+// Every version manager that shims executables — pyenv, rbenv, asdf, goenv —
+// names the directory it rewrites "shims".
+func managed(dir string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(dir), "/") {
+		switch part {
+		case "shims", ".nvm", "node_modules":
+			return true
+		}
+	}
+	return false
+}
+
+// indexOfDir returns dir's position in dirs, or -1.
+func indexOfDir(dirs []string, dir string) int {
+	for i, d := range dirs {
+		if sameDir(d, dir) {
+			return i
+		}
+	}
+	return -1
 }
 
 // Writable reports whether dir can be linked into without elevation, treating a

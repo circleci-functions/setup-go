@@ -88,7 +88,7 @@ func writeShims(src, dst string) error {
 //
 // Best effort by design: the toolchain resolving is the guarantee this package
 // makes, and a job that never runs `go install` does not care about this.
-func reportGoPathBin(goPath, linkedDir string, dirs []string) {
+func reportGoPathBin(goPath, linkedDir string, dirs []string, elevated bool) {
 	if goPath == "" {
 		return
 	}
@@ -100,6 +100,14 @@ func reportGoPathBin(goPath, linkedDir string, dirs []string) {
 	// A real directory already there cannot be pointed elsewhere without
 	// moving a job's own files, so say so rather than guess.
 	if _, err := os.Lstat(bin); err == nil {
+		fmt.Fprintf(os.Stderr,
+			"setup-go: %s is not on PATH, so binaries from `go install` need their full path\n", bin)
+		return
+	}
+
+	// A directory that took elevation to link into is no good here: `go
+	// install` runs as the job's own user and would fail to write to it.
+	if elevated {
 		fmt.Fprintf(os.Stderr,
 			"setup-go: %s is not on PATH, so binaries from `go install` need their full path\n", bin)
 		return

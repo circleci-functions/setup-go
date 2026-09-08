@@ -163,31 +163,47 @@ func TestChooseDir(t *testing.T) {
 	tests := []struct {
 		name        string
 		existing    int
+		preferred   []string
 		writable    func(string) bool
 		wantDir     string
 		wantElevate bool
 	}{
 		{
-			name:     "earliest writable entry ahead of the existing go",
+			name:      "a preferred directory wins over an earlier entry",
+			existing:  -1,
+			preferred: []string{"/third"},
+			writable:  writable("/first", "/third"),
+			wantDir:   "/third",
+		},
+		{
+			name:      "a preferred directory that is not on PATH is skipped",
+			existing:  -1,
+			preferred: []string{"/nowhere", "/second"},
+			writable:  writable("/nowhere", "/second"),
+			wantDir:   "/second",
+		},
+		{
+			name:      "a preferred directory behind the existing go is skipped",
+			existing:  1,
+			preferred: []string{"/third", "/first"},
+			writable:  writable("/first", "/third"),
+			wantDir:   "/first",
+		},
+		{
+			name:     "no preference available, so the earliest writable entry ahead of it",
 			existing: 2,
 			writable: writable("/second", "/third"),
 			wantDir:  "/second",
 		},
 		{
-			name:        "nothing writable ahead of it, so replace it in place",
+			name:        "nothing usable ahead of the existing go, so take it over",
 			existing:    1,
 			writable:    writable("/third"),
 			wantDir:     "/second",
 			wantElevate: true,
 		},
 		{
-			name:     "no go on PATH at all, so any writable entry will do",
-			existing: -1,
-			writable: writable("/third"),
-			wantDir:  "/third",
-		},
-		{
-			name:        "no go and nothing writable",
+			name:        "no go on PATH and nothing writable",
 			existing:    -1,
 			writable:    writable(),
 			wantDir:     pathlink.DefaultBinDir,
@@ -197,11 +213,39 @@ func TestChooseDir(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			dir, elevate := pathlink.ChooseDir(dirs, tc.existing, tc.writable)
+			dir, elevate := pathlink.ChooseDir(dirs, tc.existing, tc.preferred, tc.writable)
 			assert.Equal(t, dir, tc.wantDir)
 			assert.Equal(t, elevate, tc.wantElevate)
 		})
 	}
+}
+
+// A version manager rewrites its shims directory whenever it rehashes, so a
+// link left there is gone by the next step. This is what the macOS executor
+// does: ~/.pyenv/shims is the first writable entry on its PATH.
+func TestChooseDir_SkipsDirectoriesOwnedByAVersionManager(t *testing.T) {
+	dirs := []string{"/Users/distiller/.pyenv/shims", "/Users/distiller/.nvm/bin", "/usr/local/bin"}
+	anything := func(string) bool { return true }
+
+	dir, elevate := pathlink.ChooseDir(dirs, -1, nil, anything)
+	assert.Equal(t, dir, "/usr/local/bin")
+	assert.Assert(t, !elevate)
+}
+
+// Preference order is not consulted for a shim directory either, since the
+// caller builds that list from $HOME and GOPATH without knowing what PATH holds.
+func TestChooseDir_TakesOverTheExistingGoRatherThanAShimDir(t *testing.T) {
+	dirs := []string{"/home/u/.pyenv/shims", "/usr/local/go/bin"}
+	anything := func(string) bool { return true }
+
+	dir, _ := pathlink.ChooseDir(dirs, 1, nil, anything)
+	assert.Equal(t, dir, "/usr/local/go/bin")
+}
+
+func TestPreferredDirs_PutsGoPathBinFirst(t *testing.T) {
+	got := pathlink.PreferredDirs("/home/u/go")
+	assert.Equal(t, got[0], filepath.Join("/home/u/go", "bin"))
+	assert.Equal(t, got[len(got)-1], pathlink.DefaultBinDir)
 }
 
 func TestWritable(t *testing.T) {
