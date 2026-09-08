@@ -36,10 +36,14 @@ tasks:
     cmds:
       - |
         set -eu
+        # Read the Taskfile rather than ask the task binary: --list output has
+        # changed between versions, and an empty answer would pass everything
+        # or fail everything.
+        defined=" $(grep -oE '^  [a-z][a-z-]*:' Taskfile.yml | tr -d ' :' | tr '\n' ' ')"
         missing=""
         for t in $(grep -v '^[[:space:]]*#' .circleci/config.yml \
                    | grep -oE 'task [a-z][a-z-]*' | awk '{print $2}' | sort -u); do
-          task --list-all 2>/dev/null | grep -q "^\* $t:" || missing="$missing $t"
+          case "$defined" in *" $t "*) ;; *) missing="$missing $t" ;; esac
         done
         if [ -n "$missing" ]; then
           echo "CI config invokes tasks that do not exist:$missing" >&2
