@@ -82,26 +82,40 @@ func TestLintCache_CacheErrorIsNonFatal(t *testing.T) {
 }
 
 // TestGoModCache_RestoreAndSave is a table test covering the go mod cache's
-// checksum partitioning: a restore under the same checksum as a prior save
-// round-trips a marker file written into the cache dir; a restore under a
-// different checksum misses.
+// checksum and job partitioning: a restore under the same checksum and job as
+// a prior save round-trips a marker file written into the cache dir; a
+// restore under a different checksum or job misses.
 func TestGoModCache_RestoreAndSave(t *testing.T) {
 	tests := []struct {
 		name            string
 		saveChecksum    string
 		restoreChecksum string
+		saveJob         string
+		restoreJob      string
 		wantRestored    bool
 	}{
 		{
 			name:            "SameChecksum_RoundTrips",
 			saveChecksum:    "checksum-a",
 			restoreChecksum: "checksum-a",
+			saveJob:         "test",
+			restoreJob:      "test",
 			wantRestored:    true,
 		},
 		{
 			name:            "DifferentChecksum_Misses",
 			saveChecksum:    "checksum-a",
 			restoreChecksum: "checksum-b",
+			saveJob:         "test",
+			restoreJob:      "test",
+			wantRestored:    false,
+		},
+		{
+			name:            "DifferentJob_Misses",
+			saveChecksum:    "checksum-a",
+			restoreChecksum: "checksum-a",
+			saveJob:         "test-linux",
+			restoreJob:      "test-alpine",
 			wantRestored:    false,
 		},
 	}
@@ -115,9 +129,11 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 			dir := t.TempDir()
 			assert.NilError(t, os.WriteFile(filepath.Join(dir, "marker"), []byte("hit"), 0600))
 
+			t.Setenv("CIRCLE_JOB", tt.saveJob)
 			cache.SaveGoModCache(ctx, client, "", tt.saveChecksum, dir)
 			assert.NilError(t, os.RemoveAll(dir))
 
+			t.Setenv("CIRCLE_JOB", tt.restoreJob)
 			cache.RestoreGoModCache(ctx, client, "", tt.restoreChecksum)
 
 			got, err := os.ReadFile(filepath.Join(dir, "marker")) //nolint:gosec
@@ -125,7 +141,7 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 				assert.NilError(t, err)
 				assert.Equal(t, string(got), "hit")
 			} else {
-				assert.Assert(t, os.IsNotExist(err), "expected no marker file restored under a different checksum")
+				assert.Assert(t, os.IsNotExist(err), "expected no marker file restored under a different checksum or job")
 			}
 		})
 	}
