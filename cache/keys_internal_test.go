@@ -173,3 +173,60 @@ func TestRestoreBuildCache_PrefersTheExactKey(t *testing.T) {
 	_, err = os.Stat(filepath.Join(broader, "marker"))
 	assert.Assert(t, os.IsNotExist(err), "a broader tier must not be consulted once the exact key matched")
 }
+
+// TestRestoreGoModCache_OnlyMatchesTheExactKey pins the module cache to its
+// exact key. A restore that fell back to another checksum or rotation window
+// would have the teardown save re-upload those stale modules alongside the new
+// ones, so the cache would only ever grow.
+func TestRestoreGoModCache_OnlyMatchesTheExactKey(t *testing.T) {
+	const key = "mykey"
+	secs := int64(cacheRotation.Seconds())
+
+	tests := []struct {
+		name     string
+		savedKey func() string
+		wantHit  bool
+	}{
+		{
+			name:     "ExactKey",
+			savedKey: func() string { return goModCacheKey(key, "sum-current") },
+			wantHit:  true,
+		},
+		{
+			name: "DifferentChecksumSameWindow",
+			savedKey: func() string {
+				return fmt.Sprintf("%s-sum-previous-%d", cacheKeyBase("go-mod", key), rotationEpoch())
+			},
+		},
+		{
+			name: "EarlierRotationWindow",
+			savedKey: func() string {
+				return fmt.Sprintf("%s-sum-current-%d", cacheKeyBase("go-mod", key), rotationEpoch()-secs)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("CIRCLE_JOB", "test")
+
+			srv := sdktest.NewServer(t)
+			client := srv.Client()
+			ctx := context.Background()
+
+			cached := t.TempDir()
+			assert.NilError(t, os.WriteFile(filepath.Join(cached, "marker"), []byte("hit"), 0600))
+			assert.NilError(t, client.SaveCache(ctx, tt.savedKey(), []string{cached}))
+			assert.NilError(t, os.RemoveAll(cached))
+
+			RestoreGoModCache(ctx, client, key, "sum-current")
+
+			_, err := os.Stat(filepath.Join(cached, "marker"))
+			if tt.wantHit {
+				assert.NilError(t, err, "expected the exact key to restore")
+				return
+			}
+			assert.Assert(t, os.IsNotExist(err), "expected no restore from another checksum or window")
+		})
+	}
+}

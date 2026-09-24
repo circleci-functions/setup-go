@@ -94,13 +94,24 @@ func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string)
 // goModCacheKey is the circleci/go orb's go-mod key plus the rotating epoch the
 // orb only applies to its other caches:
 //
-// v1-<< parameters.key >>-go-mod-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+// v1-<< parameters.key >>-go-mod-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+//
+// Scoping by job, as the orb does since CircleCI-Public/go-orb#124, stops jobs
+// with different images or OSes that share a checksum from colliding on one
+// entry.
 //
 // Without the epoch a caller that passes no checksum has a constant key, and
 // since a save is skipped when the key already exists the cache would keep its
 // first contents forever.
+//
+// A restore tries this exact key and nothing broader, and that is what stops
+// the cache growing without limit. Unlike the build cache, the module cache
+// has no fallback tier: a dependency bump or a new rotation window starts
+// from empty, so the teardown save only ever uploads what this job
+// downloaded. A fallback to an earlier checksum or window would carry every
+// stale module forward into each new entry, and nothing would ever drop them.
 func goModCacheKey(key, checksum string) string {
-	return fmt.Sprintf("v1-%s-go-mod-%s-%s-%d", key, sdk.OSArch(), checksum, rotationEpoch())
+	return fmt.Sprintf("%s-%s-%d", cacheKeyBase("go-mod", key), checksum, rotationEpoch())
 }
 
 // RestoreBuildCache restores the go build cache (GOCACHE), trying the ordered
