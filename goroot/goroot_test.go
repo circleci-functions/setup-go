@@ -53,6 +53,32 @@ func TestLink_PrefersGoPathBin(t *testing.T) {
 	}
 }
 
+// Linking first asks whatever go PATH already holds for its GOROOT. That is
+// often the image's older toolchain, which must not switch to the version the
+// job's go.mod asks for: it would download that toolchain into the module
+// cache, silently, just to answer.
+func TestLink_AsksThePreinstalledGoWithoutSwitchingToolchains(t *testing.T) {
+	root := fakeGoRoot(t)
+	goPath, preinstalled := t.TempDir(), t.TempDir()
+	early := filepath.Join(goPath, "bin")
+	assert.NilError(t, os.MkdirAll(early, 0750))
+	seen := filepath.Join(t.TempDir(), "gotoolchain")
+	script := "#!/bin/sh\necho \"$GOTOOLCHAIN\" > " + seen + "\n"
+	assert.NilError(t, os.WriteFile(filepath.Join(preinstalled, "go"), []byte(script), 0755))
+	t.Setenv("GOTOOLCHAIN", "auto")
+
+	_, err := goroot.Link(goroot.Options{
+		GoRoot: root,
+		GoPath: goPath,
+		Path:   strings.Join([]string{preinstalled, early}, string(os.PathListSeparator)),
+	})
+	assert.NilError(t, err)
+
+	got, err := os.ReadFile(seen)
+	assert.NilError(t, err)
+	assert.Equal(t, strings.TrimSpace(string(got)), "local")
+}
+
 // Verification asks the resolved toolchain for its GOROOT rather than assuming
 // the link it just made is what answers.
 func TestLink_FailsWhenTheResolvedToolchainIsNotTheOneInstalled(t *testing.T) {

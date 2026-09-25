@@ -35,10 +35,14 @@ func GoBinary() string {
 }
 
 // AlreadyInstalled reports whether a Go binary at installDir/v.Name/bin/go[.exe]
-// reports the expected version string.
+// reports the expected version string. GOTOOLCHAIN=local stops a go.mod asking
+// for a newer Go from switching (and downloading) toolchains, which would
+// report that toolchain's version rather than this one's.
 func AlreadyInstalled(installDir string, v goversion.Version) bool {
 	goBin := filepath.Join(installDir, v.Name, "bin", GoBinary())
-	out, err := exec.Command(goBin, "version").Output() //nolint:gosec // goBin is constructed from trusted configuration
+	cmd := exec.Command(goBin, "version") //nolint:gosec // goBin is constructed from trusted configuration
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}

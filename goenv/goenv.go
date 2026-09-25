@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -20,8 +21,13 @@ type GoEnv struct {
 // LoadFrom runs `go env -json` with a specific go binary. A caller that just
 // installed a toolchain must pass that binary: it is not resolvable by name
 // until pathlink has linked it.
+//
+// GOTOOLCHAIN=local keeps the answer that binary's own: if the job's go.mod
+// asks for a newer Go, the binary must not switch to (and download) it.
 func LoadFrom(ctx context.Context, goBinary string) (*GoEnv, error) {
-	out, err := exec.CommandContext(ctx, goBinary, "env", "-json").Output()
+	cmd := exec.CommandContext(ctx, goBinary, "env", "-json")
+	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local")
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("go env -json: %w", err)
 	}

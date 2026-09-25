@@ -73,10 +73,15 @@ func GoPathBin(goPath string) string {
 // verifyGoRoot asks the resolved toolchain for its GOROOT. A toolchain honours
 // $GOROOT over its own location, so it is dropped: leaving it set would report
 // the caller's GOROOT for any binary.
+//
+// The first binary checked is whatever PATH held before linking, often an
+// older toolchain shipped with the image. GOTOOLCHAIN=local stops it switching
+// to the version the job's go.mod asks for, which would silently download that
+// toolchain into the module cache just to answer the question.
 func verifyGoRoot(goRoot string) func(string) error {
 	return func(bin string) error {
 		cmd := pathlink.Command(bin, "env", "GOROOT")
-		cmd.Env = withoutGoRoot(os.Environ())
+		cmd.Env = append(withoutGoRoot(os.Environ()), "GOTOOLCHAIN=local")
 
 		out, err := cmd.Output()
 		if err != nil {
