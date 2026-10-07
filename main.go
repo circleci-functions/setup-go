@@ -24,7 +24,7 @@ import (
 )
 
 type cli struct {
-	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable"`
+	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable" example:"1.22"`
 	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from. Overrides --version when set." default:""`
 	DetectOnly  bool   `help:"Detect and export env using the Go already on PATH, without installing."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
@@ -135,7 +135,7 @@ func run(ctx context.Context, client *sdk.Client) error {
 	var flags cli
 	kCtx := kong.Parse(&flags,
 		kong.Name("setup-go"),
-		kong.Description("Install a Go toolchain and link it onto PATH for later steps.\n\nExample:\n  circleci run setup-go@<version> -- --version 1.22"),
+		kong.Description("Install a Go toolchain and link it onto PATH for later steps."),
 		kong.UsageOnError(),
 		functionyaml.Embed(),
 	)
