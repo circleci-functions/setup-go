@@ -16,6 +16,8 @@ import (
 
 	"gotest.tools/v3/assert"
 
+	"github.com/circleci-functions/toolkit/sdk/sdktest"
+
 	"github.com/circleci-functions/setup-go/internal/testing/fakegodev"
 )
 
@@ -58,48 +60,14 @@ func TestCLI_UnknownFlag(t *testing.T) {
 // the second invocation (on a clean install dir) restores from cache without
 // re-downloading.
 func TestCLI_ToolchainCacheRoundTrip(t *testing.T) {
-	const version = "go1.22.3"
-
-	goBinScript := fmt.Sprintf(
-		"#!/bin/sh\ncase \"$1\" in\n"+
-			"  version) echo 'go version %s %s/%s' ;;\n"+
-			"  env) shift; if [ \"$1\" = -json ]; then echo '{\"GOPATH\":\"/tmp/testgopath\"}'; else for v in \"$@\"; do case \"$v\" in GOPATH) echo /tmp/testgopath ;; *) echo \"\" ;; esac; done; fi ;;\n"+
-			"esac\n",
-		version, runtime.GOOS, runtime.GOARCH)
-
-	tarball := fakegodev.BuildTarball(t, version, goBinScript)
-	tarSHA := sha256Hex(tarball)
-	tarFilename := fmt.Sprintf("%s.%s-%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)
-	tarURLPath := "/" + tarFilename
-
-	var downloadCount atomic.Int64
-	godevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == tarURLPath {
-			downloadCount.Add(1)
-			w.Header().Set("Content-Type", "application/octet-stream")
-			_, _ = w.Write(tarball)
-			return
-		}
-		rel := fakegodev.PlatformRelease(version, tarSHA)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]fakegodev.Release{rel})
-	}))
-	t.Cleanup(godevSrv.Close)
-
+	godev := newFakeGoDev(t, "go1.22.3")
 	s, run := sandbox(t)
-
-	args := []string{
-		"--version", "1.22.3",
-		"--install-dir", s.InstallDir,
-		"--api-url", godevSrv.URL + "/",
-		"--bin-dir", s.BinDir,
-	}
-
+	args := installArgs(s, godev, "--version", "1.22.3")
 	env := map[string]string{"GOPATH": ""}
 
 	out, err := run(t, env, args...)
 	assert.NilError(t, err, "run 1 failed:\n%s", out)
-	assert.Equal(t, int(downloadCount.Load()), 1, "run 1 must download the tarball exactly once")
+	assert.Equal(t, int(godev.downloads.Load()), 1, "run 1 must download the tarball exactly once")
 
 	// Simulate a fresh executor: clear the install dir so the second run
 	// must rely on the cache rather than a locally present toolchain.
@@ -107,26 +75,98 @@ func TestCLI_ToolchainCacheRoundTrip(t *testing.T) {
 
 	out, err = run(t, env, args...)
 	assert.NilError(t, err, "run 2 failed:\n%s", out)
-	assert.Equal(t, int(downloadCount.Load()), 1, "run 2 must not re-download the tarball")
+	assert.Equal(t, int(godev.downloads.Load()), 1, "run 2 must not re-download the tarball")
+}
+
+// TestCLI_DetectOnly_NeedsNoGoDev pins that --detect-only, which installs
+// nothing, does not depend on go.dev either.
+func TestCLI_DetectOnly_NeedsNoGoDev(t *testing.T) {
+	godev := newFakeGoDev(t)
+	godev.down.Store(true)
+	_, run := sandbox(t)
+	binDir := stubGoOnlyBinDir(t)
+
+	out, err := run(t, map[string]string{"PATH": binDir, "GOPATH": ""},
+		"--detect-only", "--api-url", godev.URL)
+	assert.NilError(t, err, "got: %s", out)
+	assert.Equal(t, godev.releaseRequests.Load(), int64(0))
 }
 
 // TestCLI_VersionFile_ReadsGoMod verifies that --version-file reads the go
 // directive from a go.mod file and uses it to select the toolchain version.
 func TestCLI_VersionFile_ReadsGoMod(t *testing.T) {
-	_, run := sandbox(t)
-	ts := fakegodev.New(t, []fakegodev.Release{
-		fakegodev.PlatformRelease("go1.22.5", "aaa"),
-		fakegodev.PlatformRelease("go1.22.3", "bbb"),
-	}, nil)
+	godev := newFakeGoDev(t, "go1.22.5", "go1.22.3")
+	s, run := sandbox(t)
 
 	gomod := filepath.Join(t.TempDir(), "go.mod")
 	assert.NilError(t, os.WriteFile(gomod, []byte("module example\n\ngo 1.22\n"), 0600))
 
-	bashEnvFile := filepath.Join(t.TempDir(), "bash_env")
-	out, err := run(t, map[string]string{"GOPATH": "", "BASH_ENV": bashEnvFile},
-		"--detect-only", "--version-file", gomod, "--api-url", ts.URL)
+	out, err := run(t, map[string]string{"GOPATH": ""}, installArgs(s, godev, "--version-file", gomod)...)
 	assert.NilError(t, err, "got: %s", out)
 	assert.Assert(t, strings.Contains(out, "go1.22.5"), "expected resolved version in output, got: %s", out)
+}
+
+// fakeGoDev is a go.dev serving a stub toolchain for each of its releases.
+// Setting down fails its release list, as an outage would; tarballs still
+// download, since they come from a different host in production.
+type fakeGoDev struct {
+	URL             string
+	down            atomic.Bool
+	releaseRequests atomic.Int64
+	downloads       atomic.Int64
+}
+
+// newFakeGoDev serves versions, newest first as go.dev lists them.
+func newFakeGoDev(t *testing.T, versions ...string) *fakeGoDev {
+	t.Helper()
+	f := &fakeGoDev{}
+	tarballs := map[string][]byte{}
+	var releases []fakegodev.Release
+	for _, version := range versions {
+		tarball := fakegodev.BuildTarball(t, version, stubToolchainScript(version))
+		tarballs[fmt.Sprintf("/%s.%s-%s.tar.gz", version, runtime.GOOS, runtime.GOARCH)] = tarball
+		releases = append(releases, fakegodev.PlatformRelease(version, sha256Hex(tarball)))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tarball, ok := tarballs[r.URL.Path]; ok {
+			f.downloads.Add(1)
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write(tarball)
+			return
+		}
+		f.releaseRequests.Add(1)
+		if f.down.Load() {
+			http.Error(w, "go.dev is down", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(releases)
+	}))
+	t.Cleanup(srv.Close)
+	f.URL = srv.URL + "/"
+	return f
+}
+
+// installArgs returns the flags that keep an install inside the sandbox and
+// pointed at godev, followed by extra.
+func installArgs(s *sdktest.Sandbox, godev *fakeGoDev, extra ...string) []string {
+	return append([]string{
+		"--install-dir", s.InstallDir,
+		"--api-url", godev.URL,
+		"--bin-dir", s.BinDir,
+	}, extra...)
+}
+
+// stubToolchainScript is a `go` that reports version and answers the `go env`
+// queries setup-go makes of a toolchain it has just installed.
+func stubToolchainScript(version string) string {
+	return fmt.Sprintf(
+		"#!/bin/sh\ncase \"$1\" in\n"+
+			"  version) echo 'go version %s %s/%s' ;;\n"+
+			"  env) shift; if [ \"$1\" = -json ]; then echo '{\"GOPATH\":\"/tmp/testgopath\"}'; else for v in \"$@\"; do case \"$v\" in GOPATH) echo /tmp/testgopath ;; *) echo \"\" ;; esac; done; fi ;;\n"+
+			"esac\n",
+		version, runtime.GOOS, runtime.GOARCH)
 }
 
 func sha256Hex(data []byte) string {
