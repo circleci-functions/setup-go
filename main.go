@@ -26,7 +26,7 @@ import (
 type cli struct {
 	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable" example:"1.22"`
 	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from. Overrides --version when set." default:""`
-	DetectOnly  bool   `help:"Detect and export env using the Go already on PATH, without installing."`
+	DetectOnly  bool   `help:"Use the Go already on PATH, without installing. --version and --version-file are ignored."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
 	APIURL      string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
 	BinDir      string `name:"bin-dir" help:"Link go/gofmt into this directory instead of discovering one on PATH." hidden:"" default:""`
@@ -41,27 +41,7 @@ type cli struct {
 }
 
 func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
-	spec := c.Version
-	if c.VersionFile != "" {
-		v, err := goversion.ReadVersionFile(c.VersionFile)
-		if err != nil {
-			return fmt.Errorf("read version file %q: %w", c.VersionFile, err)
-		}
-		spec = v
-	}
-
-	ver, err := goversion.ResolveVersion(ctx, c.APIURL, spec)
-	if err != nil {
-		return fmt.Errorf("resolve version: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", spec, ver.Name)
-
-	gorootDir, err := install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
-		InstallDir: expandHome(c.InstallDir),
-		DetectOnly: c.DetectOnly,
-		NoCache:    !c.Cache,
-		CacheNonce: c.CacheNonce,
-	})
+	gorootDir, err := c.toolchain(ctx, client)
 	if err != nil {
 		return err
 	}
@@ -87,6 +67,35 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 	_ = cgoalpine.InstallToolchain(ctx, cgoalpine.DefaultOSReleasePath)
 
 	return c.setupJobCaches(ctx, client, env)
+}
+
+// toolchain returns the GOROOT of the toolchain to set up. Under --detect-only
+// that is the one already on PATH, so no version spec is resolved at all.
+func (c *cli) toolchain(ctx context.Context, client *sdk.Client) (string, error) {
+	if c.DetectOnly {
+		return install.Detect()
+	}
+
+	spec := c.Version
+	if c.VersionFile != "" {
+		v, err := goversion.ReadVersionFile(c.VersionFile)
+		if err != nil {
+			return "", fmt.Errorf("read version file %q: %w", c.VersionFile, err)
+		}
+		spec = v
+	}
+
+	ver, err := goversion.ResolveVersion(ctx, c.APIURL, spec)
+	if err != nil {
+		return "", fmt.Errorf("resolve version: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", spec, ver.Name)
+
+	return install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
+		InstallDir: expandHome(c.InstallDir),
+		NoCache:    !c.Cache,
+		CacheNonce: c.CacheNonce,
+	})
 }
 
 // setupJobCaches restores the selected caches and registers their saves for the

@@ -49,17 +49,18 @@ func AlreadyInstalled(installDir string, v goversion.Version) bool {
 	return strings.Contains(string(out), v.Name)
 }
 
-// Ensure returns the GOROOT for v, installing it if not already present.
-// If detectOnly is true, it returns the GOROOT of the go binary already on PATH
-// without downloading anything.
-func Ensure(ctx context.Context, v goversion.Version, installDir string, detectOnly bool) (string, error) {
-	if detectOnly {
-		p, err := exec.LookPath("go")
-		if err != nil {
-			return "", fmt.Errorf("no 'go' binary found on PATH")
-		}
-		return filepath.Dir(filepath.Dir(p)), nil
+// Detect returns the GOROOT of the go binary already on PATH, for a job that
+// brings its own toolchain.
+func Detect() (string, error) {
+	p, err := exec.LookPath("go")
+	if err != nil {
+		return "", fmt.Errorf("no 'go' binary found on PATH")
 	}
+	return filepath.Dir(filepath.Dir(p)), nil
+}
+
+// Ensure returns the GOROOT for v, installing it if not already present.
+func Ensure(ctx context.Context, v goversion.Version, installDir string) (string, error) {
 	if AlreadyInstalled(installDir, v) {
 		goroot := filepath.Join(installDir, v.Name)
 		fmt.Fprintf(os.Stderr, "setup-go: %s already installed at %s, skipping download\n", v.Name, goroot)
@@ -71,7 +72,6 @@ func Ensure(ctx context.Context, v goversion.Version, installDir string, detectO
 
 type EnsureCachedOptions struct {
 	InstallDir string
-	DetectOnly bool
 	NoCache    bool
 	// CacheNonce partitions the toolchain cache. Only the acceptance suite
 	// sets it, so a run cannot restore an earlier run's toolchain.
@@ -82,11 +82,11 @@ type EnsureCachedOptions struct {
 // before downloading, and saves it to cache after a fresh install. Cache errors
 // are non-fatal — a cache hiccup never blocks the install.
 //
-// When NoCache or DetectOnly is set, or the toolchain is already locally
-// installed, it delegates straight to Ensure with no cache calls.
+// When NoCache is set, or the toolchain is already locally installed, it
+// delegates straight to Ensure with no cache calls.
 func EnsureCached(ctx context.Context, client *sdk.Client, v goversion.Version, options EnsureCachedOptions) (string, error) {
-	if options.NoCache || options.DetectOnly || AlreadyInstalled(options.InstallDir, v) {
-		return Ensure(ctx, v, options.InstallDir, options.DetectOnly)
+	if options.NoCache || AlreadyInstalled(options.InstallDir, v) {
+		return Ensure(ctx, v, options.InstallDir)
 	}
 
 	key := toolchainCacheKey(v, options.CacheNonce)

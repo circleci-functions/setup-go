@@ -145,8 +145,8 @@ func TestInstall_ZipErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "illegal path")
 }
 
-func TestEnsure(t *testing.T) {
-	t.Run("detect-only go on PATH", func(t *testing.T) {
+func TestDetect(t *testing.T) {
+	t.Run("go on PATH", func(t *testing.T) {
 		tmp := t.TempDir()
 		binDir := filepath.Join(tmp, "bin")
 		if err := os.MkdirAll(binDir, 0750); err != nil {
@@ -156,19 +156,19 @@ func TestEnsure(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("PATH", binDir)
-		v := goversion.Version{Name: "go1.22.3"}
-		goroot, err := install.Ensure(context.Background(), v, "", true)
+		goroot, err := install.Detect()
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, tmp)
 	})
 
-	t.Run("detect-only no go on PATH", func(t *testing.T) {
+	t.Run("no go on PATH", func(t *testing.T) {
 		t.Setenv("PATH", "")
-		v := goversion.Version{Name: "go1.22.3"}
-		_, err := install.Ensure(context.Background(), v, "", true)
+		_, err := install.Detect()
 		assert.ErrorContains(t, err, "no 'go' binary found on PATH")
 	})
+}
 
+func TestEnsure(t *testing.T) {
 	t.Run("already installed", func(t *testing.T) {
 		installDir := t.TempDir()
 		goBin := filepath.Join(installDir, "go1.22.3", "bin", "go")
@@ -180,7 +180,7 @@ func TestEnsure(t *testing.T) {
 			t.Fatal(err)
 		}
 		v := goversion.Version{Name: "go1.22.3"}
-		goroot, err := install.Ensure(context.Background(), v, installDir, false)
+		goroot, err := install.Ensure(context.Background(), v, installDir)
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, filepath.Join(installDir, "go1.22.3"))
 	})
@@ -198,7 +198,7 @@ func TestEnsure(t *testing.T) {
 			Stable: true,
 		}
 		installDir := t.TempDir()
-		goroot, err := install.Ensure(context.Background(), v, installDir, false)
+		goroot, err := install.Ensure(context.Background(), v, installDir)
 		assert.NilError(t, err)
 		assert.Equal(t, goroot, filepath.Join(installDir, "go1.22.3"))
 		_, statErr := os.Stat(filepath.Join(goroot, "bin", "go"))
