@@ -184,6 +184,22 @@ jobs:
           platform: windows/amd64
           ext: ".exe"
 
+  # Keeps the release PR up to date (see RELEASE.md).
+  release-pr:
+    executor: go
+    steps:
+      - checkout
+      # github-release's token, which can also read private modules.
+      - toolkit/private-mod-init
+      - restore_cache:
+          keys:
+            - setup-go-go-{{ checksum "go.sum" }}-
+            - setup-go-go-
+      - run:
+          name: Open, update or close the release PR
+          command: go tool release-pr update
+
+  # Publishes only on the push that merges the release PR; halts otherwise.
   publish:
     executor: go
     steps:
@@ -193,13 +209,20 @@ jobs:
           keys:
             - setup-go-go-{{ checksum "go.sum" }}-
             - setup-go-go-
+      - run:
+          name: Halt unless the release is unpublished
+          command: |
+            VERSION="$(go tool release-pr pending)"
+            if [ -z "$VERSION" ]; then
+              circleci-agent step halt
+              exit 0
+            fi
+            echo "export VERSION=$VERSION" >> "$BASH_ENV"
       - toolkit/setup-aws-oidc:
           role_arn: $FUNCTIONS_PUBLISHER_ROLE_ARN
       - run:
-          name: Extract version from tag
-          command: |
-            VERSION="${CIRCLE_TAG}-$(git rev-parse --short HEAD)"
-            echo "export VERSION=$VERSION" >> "$BASH_ENV"
+          name: Make the GitHub release and tag
+          command: go tool release-pr tag
       - run:
           name: Build and publish
           command: task publish VERSION="$VERSION"
@@ -209,50 +232,36 @@ workflows:
     jobs:
       - test:
           context: [github-readonly]
-          filters:
-            tags:
-              only: /.*/
       - build:
           context: [github-readonly]
-          filters:
-            tags:
-              only: /.*/
       - acceptance:
           context: [github-readonly]
-          filters:
-            tags:
-              only: /.*/
       - bare-smoke:
           requires: [build]
-          filters:
-            tags:
-              only: /.*/
       - smoke-machine:
           requires: [build]
-          filters:
-            tags:
-              only: /.*/
       - smoke-macos:
           requires: [build]
-          filters:
-            tags:
-              only: /.*/
       - smoke-windows:
           requires: [build]
-          filters:
-            tags:
-              only: /.*/
-      - publish:
-          requires:
+      - release-pr:
+          # One at a time, so two pushes can't race to rewrite release/next.
+          serial-group: << pipeline.project.slug >>/release-pr
+          requires: &release-requires
             - test
             - acceptance
             - bare-smoke
             - smoke-machine
             - smoke-macos
             - smoke-windows
-          context: [functions-publisher, github-readonly]
+          context: [github-release]
           filters:
-            tags:
-              only: /^v\d+\.\d+\.\d+$/
             branches:
-              ignore: /.*/
+              only: main
+      - publish:
+          serial-group: << pipeline.project.slug >>/publish
+          requires: *release-requires
+          context: [functions-publisher, github-release]
+          filters:
+            branches:
+              only: main
