@@ -1,7 +1,7 @@
 version: 2.1
 
 orbs:
-  toolkit: https://raw.githubusercontent.com/circleci-functions/toolkit/refs/heads/st/pie-188-release-orb-jobs/orbs/toolkit.yml
+  toolkit: https://raw.githubusercontent.com/circleci-functions/toolkit/refs/heads/main/orbs/toolkit.yml
 
 parameters:
   go-version:
