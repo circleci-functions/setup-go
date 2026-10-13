@@ -184,49 +184,6 @@ jobs:
           platform: windows/amd64
           ext: ".exe"
 
-  # Keeps the release PR up to date (see RELEASE.md).
-  release-pr:
-    executor: go
-    steps:
-      - checkout
-      # github-release's token, which can also read private modules.
-      - toolkit/private-mod-init
-      - restore_cache:
-          keys:
-            - setup-go-go-{{ checksum "go.sum" }}-
-            - setup-go-go-
-      - run:
-          name: Open, update or close the release PR
-          command: go tool release-pr update
-
-  # Publishes only on the push that merges the release PR; halts otherwise.
-  publish:
-    executor: go
-    steps:
-      - checkout
-      - toolkit/private-mod-init
-      - restore_cache:
-          keys:
-            - setup-go-go-{{ checksum "go.sum" }}-
-            - setup-go-go-
-      - run:
-          name: Halt unless the release is unpublished
-          command: |
-            VERSION="$(go tool release-pr pending)"
-            if [ -z "$VERSION" ]; then
-              circleci-agent step halt
-              exit 0
-            fi
-            echo "export VERSION=$VERSION" >> "$BASH_ENV"
-      - toolkit/setup-aws-oidc:
-          role_arn: $FUNCTIONS_PUBLISHER_ROLE_ARN
-      - run:
-          name: Make the GitHub release and tag
-          command: go tool release-pr tag
-      - run:
-          name: Build and publish
-          command: task publish VERSION="$VERSION"
-
 workflows:
   test-publish:
     jobs:
@@ -244,7 +201,10 @@ workflows:
           requires: [build]
       - smoke-windows:
           requires: [build]
-      - release-pr:
+      - toolkit/release-pr:
+          name: release-pr
+          executor: go
+          cache-prefix: setup-go-go
           # One at a time, so two pushes can't race to rewrite release/next.
           serial-group: << pipeline.project.slug >>/release-pr
           requires: &release-requires
@@ -258,7 +218,10 @@ workflows:
           filters:
             branches:
               only: main
-      - publish:
+      - toolkit/publish:
+          name: publish
+          executor: go
+          cache-prefix: setup-go-go
           serial-group: << pipeline.project.slug >>/publish
           requires: *release-requires
           context: [functions-publisher, github-release]
