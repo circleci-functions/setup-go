@@ -25,14 +25,28 @@ type Saver interface {
 	SaveCache(ctx context.Context, key string, paths []string, opts ...sdk.CacheOption) error
 }
 
-// LintCacheDir returns golangci-lint's cache directory. It currently always
-// returns the tool's own default, ~/.cache/golangci-lint.
+// LintCacheDir returns the directory golangci-lint caches into, by the rule
+// golangci-lint itself follows: $GOLANGCI_LINT_CACHE when it is set, and
+// otherwise golangci-lint under os.UserCacheDir, which is $XDG_CACHE_HOME or
+// ~/.cache on Linux, ~/Library/Caches on macOS and %LocalAppData% on Windows.
+// It returns "" when $GOLANGCI_LINT_CACHE is "off", since golangci-lint then
+// caches nothing, and an error when it is a relative path, which golangci-lint
+// rejects.
 func LintCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+	if dir := os.Getenv("GOLANGCI_LINT_CACHE"); dir != "" {
+		switch {
+		case dir == "off":
+			return "", nil
+		case !filepath.IsAbs(dir):
+			return "", fmt.Errorf("GOLANGCI_LINT_CACHE is not an absolute path: %q", dir)
+		}
+		return dir, nil
 	}
-	return filepath.Join(home, ".cache", "golangci-lint"), nil
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user cache directory: %w", err)
+	}
+	return filepath.Join(dir, "golangci-lint"), nil
 }
 
 // RestoreLintCache restores golangci-lint's cache directory from the
@@ -40,7 +54,13 @@ func LintCacheDir() (string, error) {
 // best-effort: a cache-call failure is logged to stderr and never blocks the
 // test run.
 func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)},
+	dir, err := LintCacheDir()
+	if err != nil || dir == "" {
+		sdk.LogCacheErr("restore lint", err)
+		return
+	}
+
+	_, err = client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)},
 		sdk.WithStepName("Restoring golangci-lint cache"))
 	sdk.LogCacheErr("restore lint", err)
 }
@@ -48,9 +68,8 @@ func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum str
 // SaveLintCache saves golangci-lint's cache directory to the CircleCI job
 // cache.
 func SaveLintCache(ctx context.Context, saver Saver, key, checksum string) {
-	// TODO: need to be able to set the cache dir other than the default.
 	dir, err := LintCacheDir()
-	if err != nil {
+	if err != nil || dir == "" {
 		sdk.LogCacheErr("save lint", err)
 		return
 	}

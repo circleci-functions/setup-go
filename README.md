@@ -68,6 +68,12 @@ Add `--golangci-lint-cache` if the job also runs golangci-lint:
 - run: circleci run setup-go@<version> -- --golangci-lint-cache --checksum '{{ checksum "go.sum" }}'
 ```
 
+It caches the directory golangci-lint uses: `$GOLANGCI_LINT_CACHE` if set, and
+otherwise `golangci-lint` under the user cache directory (`$XDG_CACHE_HOME` or
+`~/.cache` on Linux, `~/Library/Caches` on macOS, `%LocalAppData%` on Windows).
+`GOLANGCI_LINT_CACHE=off` turns it off. Set `GOLANGCI_LINT_CACHE` on the job,
+not on a later step, so setup-go sees the same value golangci-lint does.
+
 Turn a single cache off with `--build-cache=false`, or all of them with
 `--cache=false`. Cache problems never fail the job.
 
