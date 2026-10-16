@@ -49,11 +49,23 @@ declares it:
 - run: circleci run setup-go@<version> -- --version-file go.mod
 ```
 
-It takes the higher of the file's `go` directive and its `toolchain` line. A
-`toolchain` line names an exact release; a `go` directive is resolved as
-`--version` would resolve it. That is the toolchain a later `go` command would
-switch to under the default `GOTOOLCHAIN=auto`, so no later step downloads one
-of its own. setup-go does not set `GOTOOLCHAIN`.
+It takes the higher of the file's `go` directive and its `toolchain` line,
+which is the toolchain a later `go` command would switch to under the default
+`GOTOOLCHAIN=auto`, so no later step downloads one of its own. setup-go does
+not set `GOTOOLCHAIN`.
+
+| Line | Resolves to |
+|------|-------------|
+| `toolchain go1.24.3` | Exact `go1.24.3` |
+| `go 1.24` or `go 1.24.0` | Newest stable `go1.24.x` |
+| `go 1.24.3` | Newest stable `go1.24.x`, at least `go1.24.3` |
+| `go 1.25rc1` | Newest stable `go1.25.x`, or the newest `go1.25` prerelease if there is none yet |
+
+The `go` directive is a minimum, not a build target, so setup-go takes the
+newest patch that meets it. It never moves to a newer minor. Before Go 1.21 the
+directive wasn't enforced, so an old module can declare a Go too old to build
+it: if `--version-file` installs a Go that can't build your module, pass
+`--version` instead.
 
 ## Caching
 
@@ -85,7 +97,7 @@ download entirely.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--version` | `stable` | Version spec: `stable`, `latest`, `1.24`, `1.24.3` |
-| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the version from its `go` directive or, if higher, its `toolchain` line. Overrides `--version`. |
+| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; installs the newest patch its `go` directive allows or, if higher, its `toolchain` line. Overrides `--version`. |
 | `--detect-only` | false | Use the `go` already on `PATH` instead of installing one. `--version` and `--version-file` are ignored |
 | `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
 | `--cache` | true | Set to `false` to disable all caching |

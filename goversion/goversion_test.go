@@ -54,66 +54,94 @@ func TestReadVersionFile(t *testing.T) {
 		return p
 	}
 
+	minimum := func(v string) goversion.Requirement { return goversion.Requirement{Version: v} }
+	exact := func(v string) goversion.Requirement { return goversion.Requirement{Version: v, Exact: true} }
+
 	tests := []struct {
 		name    string
 		content string
-		want    string
+		want    goversion.Requirement
 		wantErr string
 	}{
 		{
 			name:    "patch version",
 			content: "module example\n\ngo 1.22.3\n",
-			want:    "1.22.3",
+			want:    minimum("go1.22.3"),
 		},
 		{
 			name:    "minor only",
 			content: "module example\n\ngo 1.22\n",
-			want:    "1.22",
+			want:    minimum("go1.22"),
+		},
+		{
+			name:    "release candidate",
+			content: "module example\n\ngo 1.21rc2\n",
+			want:    minimum("go1.21rc2"),
+		},
+		{
+			name:    "indented",
+			content: "module example\n\n  go 1.22\n",
+			want:    minimum("go1.22"),
+		},
+		{
+			name:    "trailing comment",
+			content: "module example\n\ngo 1.22 // pinned\n",
+			want:    minimum("go1.22"),
 		},
 		{
 			name:    "go.work style",
 			content: "go 1.21\n\nuse .\n",
-			want:    "1.21",
+			want:    minimum("go1.21"),
 		},
 		{
 			name:    "toolchain newer than go",
 			content: "module example\n\ngo 1.22\n\ntoolchain go1.23.4\n",
-			want:    "1.23.4",
+			want:    exact("go1.23.4"),
 		},
 		{
 			name:    "toolchain before go",
 			content: "module example\n\ntoolchain go1.23.4\n\ngo 1.22\n",
-			want:    "1.23.4",
+			want:    exact("go1.23.4"),
 		},
 		{
 			name:    "toolchain older than go",
 			content: "module example\n\ngo 1.23.2\n\ntoolchain go1.22.5\n",
-			want:    "1.23.2",
+			want:    minimum("go1.23.2"),
 		},
 		{
 			name:    "toolchain names the go directive's minor",
 			content: "module example\n\ngo 1.22\n\ntoolchain go1.22.0\n",
-			want:    "1.22.0",
+			want:    exact("go1.22.0"),
 		},
 		{
 			name:    "toolchain equal to go",
 			content: "module example\n\ngo 1.22.3\n\ntoolchain go1.22.3\n",
-			want:    "1.22.3",
+			want:    minimum("go1.22.3"),
+		},
+		{
+			name:    "toolchain release candidate",
+			content: "module example\n\ngo 1.22\n\ntoolchain go1.23rc1\n",
+			want:    exact("go1.23rc1"),
 		},
 		{
 			name:    "go.work toolchain",
 			content: "go 1.21\n\ntoolchain go1.22.1\n\nuse .\n",
-			want:    "1.22.1",
+			want:    exact("go1.22.1"),
 		},
 		{
 			name:    "toolchain without go",
 			content: "module example\n\ntoolchain go1.23.4\n",
-			want:    "1.23.4",
+			want:    exact("go1.23.4"),
 		},
 		{
 			name:    "toolchain default is not a version",
 			content: "module example\n\ngo 1.22\n\ntoolchain default\n",
-			want:    "1.22",
+			want:    minimum("go1.22"),
+		},
+		{
+			name:    "go directive that is not a version",
+			content: "module example\n\ngo one\n",
+			wantErr: `go directive "one"`,
 		},
 		{
 			name:    "no directive",
@@ -139,6 +167,53 @@ func TestReadVersionFile(t *testing.T) {
 		_, err := goversion.ReadVersionFile("/nonexistent/go.mod")
 		assert.Assert(t, err != nil)
 	})
+}
+
+func TestResolveRequirement(t *testing.T) {
+	ts := fakegodev.New(t, fixtureReleases(), nil)
+
+	tests := []struct {
+		name     string
+		req      goversion.Requirement
+		wantName string
+		wantErr  string
+	}{
+		{name: "minor picks newest patch", req: goversion.Requirement{Version: "go1.22"}, wantName: "go1.22.5"},
+		{name: "patch is a minimum", req: goversion.Requirement{Version: "go1.22.0"}, wantName: "go1.22.5"},
+		{name: "minimum met exactly", req: goversion.Requirement{Version: "go1.22.5"}, wantName: "go1.22.5"},
+		{name: "release candidate takes the stable release", req: goversion.Requirement{Version: "go1.23rc1"}, wantName: "go1.23.0"},
+		{name: "prerelease only when nothing stable meets it", req: goversion.Requirement{Version: "go1.24"}, wantName: "go1.24rc1"},
+		{
+			name:    "never a newer minor",
+			req:     goversion.Requirement{Version: "go1.21"},
+			wantErr: `no Go release found for "go 1.21"`,
+		},
+		{
+			name:    "minimum above every release of its minor",
+			req:     goversion.Requirement{Version: "go1.22.6"},
+			wantErr: "pass --version to use a newer Go",
+		},
+		{name: "toolchain is exact", req: goversion.Requirement{Version: "go1.22.3", Exact: true}, wantName: "go1.22.3"},
+		{name: "toolchain prerelease", req: goversion.Requirement{Version: "go1.24rc1", Exact: true}, wantName: "go1.24rc1"},
+		{
+			name:    "toolchain not released",
+			req:     goversion.Requirement{Version: "go1.22.4", Exact: true},
+			wantErr: `no Go release found for "toolchain go1.22.4"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v, err := goversion.ResolveRequirement(context.Background(), ts.URL+"/", tt.req)
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			assert.NilError(t, err)
+			assert.Equal(t, v.Name, tt.wantName)
+			assert.Equal(t, v.Spec, tt.req.String())
+		})
+	}
 }
 
 func TestResolveVersion(t *testing.T) {

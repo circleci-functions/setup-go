@@ -106,6 +106,20 @@ func TestCLI_VersionFile_ReadsGoMod(t *testing.T) {
 	assert.Assert(t, strings.Contains(out, "go1.22.5"), "expected resolved version in output, got: %s", out)
 }
 
+// TestCLI_VersionFile_GoDirectiveIsAMinimum pins that a go directive naming a
+// patch gets the newest patch of its minor, not the one it names.
+func TestCLI_VersionFile_GoDirectiveIsAMinimum(t *testing.T) {
+	godev := newFakeGoDev(t, "go1.23.0", "go1.22.5", "go1.22.0")
+	s, run := sandbox(t)
+
+	gomod := filepath.Join(t.TempDir(), "go.mod")
+	assert.NilError(t, os.WriteFile(gomod, []byte("module example\n\ngo 1.22.0\n"), 0600))
+
+	out, err := run(t, map[string]string{"GOPATH": ""}, installArgs(s, godev, "--version-file", gomod)...)
+	assert.NilError(t, err, "got: %s", out)
+	assert.Assert(t, strings.Contains(out, `resolved "go 1.22.0" → go1.22.5`), "got: %s", out)
+}
+
 // TestCLI_VersionFile_PrefersNewerToolchain pins that a go.mod whose toolchain
 // line asks for a newer Go than its go directive gets that toolchain, which is
 // the one a later go command would otherwise switch to and download.
@@ -118,7 +132,7 @@ func TestCLI_VersionFile_PrefersNewerToolchain(t *testing.T) {
 
 	out, err := run(t, map[string]string{"GOPATH": ""}, installArgs(s, godev, "--version-file", gomod)...)
 	assert.NilError(t, err, "got: %s", out)
-	assert.Assert(t, strings.Contains(out, `resolved "1.23.4" → go1.23.4`), "got: %s", out)
+	assert.Assert(t, strings.Contains(out, `resolved "toolchain go1.23.4" → go1.23.4`), "got: %s", out)
 }
 
 // fakeGoDev is a go.dev serving a stub toolchain for each of its releases.

@@ -25,7 +25,7 @@ import (
 
 type cli struct {
 	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable" example:"1.22"`
-	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from: the higher of its go directive and toolchain line. Overrides --version when set." default:""`
+	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from: the newest patch its go directive allows, or its toolchain line if higher. Overrides --version when set." default:""`
 	DetectOnly  bool   `help:"Use the Go already on PATH, without installing. --version and --version-file are ignored."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
 	APIURL      string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
@@ -76,26 +76,37 @@ func (c *cli) toolchain(ctx context.Context, client *sdk.Client) (string, error)
 		return install.Detect()
 	}
 
-	spec := c.Version
-	if c.VersionFile != "" {
-		v, err := goversion.ReadVersionFile(c.VersionFile)
-		if err != nil {
-			return "", fmt.Errorf("read version file %q: %w", c.VersionFile, err)
-		}
-		spec = v
-	}
-
-	ver, err := goversion.ResolveVersion(ctx, c.APIURL, spec)
+	ver, err := c.resolve(ctx)
 	if err != nil {
-		return "", fmt.Errorf("resolve version: %w", err)
+		return "", err
 	}
-	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", spec, ver.Name)
+	fmt.Fprintf(os.Stderr, "setup-go: resolved %q → %s\n", ver.Spec, ver.Name)
 
 	return install.EnsureCached(ctx, client, *ver, install.EnsureCachedOptions{
 		InstallDir: expandHome(c.InstallDir),
 		NoCache:    !c.Cache,
 		CacheNonce: c.CacheNonce,
 	})
+}
+
+// resolve picks the release to install: the one --version-file asks for when
+// it is set, and --version otherwise.
+func (c *cli) resolve(ctx context.Context) (*goversion.Version, error) {
+	var ver *goversion.Version
+	var err error
+	if c.VersionFile == "" {
+		ver, err = goversion.ResolveVersion(ctx, c.APIURL, c.Version)
+	} else {
+		req, readErr := goversion.ReadVersionFile(c.VersionFile)
+		if readErr != nil {
+			return nil, fmt.Errorf("read version file %q: %w", c.VersionFile, readErr)
+		}
+		ver, err = goversion.ResolveRequirement(ctx, c.APIURL, req)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve version: %w", err)
+	}
+	return ver, nil
 }
 
 // setupJobCaches restores the selected caches and registers their saves for the
