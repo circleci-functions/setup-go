@@ -71,6 +71,19 @@ Add `--golangci-lint-cache` if the job also runs golangci-lint:
 Turn a single cache off with `--build-cache=false`, or all of them with
 `--cache=false`. Cache problems never fail the job.
 
+Because the build cache is restored, `go test` can print `ok <package> (cached)`
+instead of running a package's tests again. Go replays an earlier result when
+nothing the tests depend on has changed: the code, its dependencies, and the
+files and environment variables the tests read. With `-json` or `-v`, which
+gotestsum uses, the replay still lists every test, so test reports stay
+complete. To run the tests every time, pass `-count=1`:
+
+```yaml
+- run: go test -count=1 ./...
+```
+
+Compiling still uses the build cache, so this costs only the test run itself.
+
 The installed toolchain is cached too, so a fresh executor usually skips the
 download entirely.
 
