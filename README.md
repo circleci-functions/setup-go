@@ -74,6 +74,24 @@ Turn a single cache off with `--build-cache=false`, or all of them with
 The installed toolchain is cached too, so a fresh executor usually skips the
 download entirely.
 
+## Test results
+
+setup-go doesn't write test results itself. To see them in CircleCI, run the
+tests through [gotestsum](https://github.com/gotestyourself/gotestsum), which
+writes JUnit XML, and store the file it writes:
+
+```yaml
+- run: go run gotest.tools/gotestsum@v1.13.0 --junitfile test-results/junit.xml -- ./...
+- store_test_results:
+    path: test-results
+```
+
+If your module declares gotestsum as a tool, with
+`go get -tool gotest.tools/gotestsum`, run `go tool gotestsum` instead, so
+go.mod pins its version. Either way there is nothing to install: Go is already
+on `PATH`, and the module and build caches keep gotestsum from being
+downloaded and built again on every run.
+
 ## Flags
 
 | Flag | Default | Description |
