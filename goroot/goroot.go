@@ -70,24 +70,33 @@ func GoPathBin(goPath string) string {
 	return ""
 }
 
-// verifyGoRoot asks the resolved toolchain for its GOROOT. A toolchain honours
-// $GOROOT over its own location, so it is dropped: leaving it set would report
-// the caller's GOROOT for any binary.
+// Of asks the go binary bin for its GOROOT. A toolchain honours $GOROOT over
+// its own location, so it is dropped: leaving it set would report the caller's
+// GOROOT for any binary.
 //
-// The first binary checked is whatever PATH held before linking, often an
-// older toolchain shipped with the image. GOTOOLCHAIN=local stops it switching
-// to the version the job's go.mod asks for, which would silently download that
-// toolchain into the module cache just to answer the question.
+// bin may be an older toolchain shipped with the image. GOTOOLCHAIN=local
+// stops it switching to the version the job's go.mod asks for, which would
+// silently download that toolchain into the module cache just to answer the
+// question.
+func Of(bin string) (string, error) {
+	cmd := pathlink.Command(bin, "env", "GOROOT")
+	cmd.Env = append(withoutGoRoot(os.Environ()), "GOTOOLCHAIN=local")
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// verifyGoRoot checks that bin, a go that PATH resolves to, is the toolchain
+// at goRoot.
 func verifyGoRoot(goRoot string) func(string) error {
 	return func(bin string) error {
-		cmd := pathlink.Command(bin, "env", "GOROOT")
-		cmd.Env = append(withoutGoRoot(os.Environ()), "GOTOOLCHAIN=local")
-
-		out, err := cmd.Output()
+		got, err := Of(bin)
 		if err != nil {
 			return fmt.Errorf("could not report its GOROOT: %w", err)
 		}
-		got := strings.TrimSpace(string(out))
 		if !sameDir(got, goRoot) {
 			return fmt.Errorf("has GOROOT %q, not %q", got, goRoot)
 		}
