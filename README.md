@@ -80,7 +80,9 @@ before your steps run, and saves them once the job is done — so nothing in
 between needs a cache step of its own, and a job that fails, is cancelled or
 times out still keeps what it downloaded and compiled.
 
-Pass `--checksum` so the caches refresh when your dependencies change:
+Pass `--checksum` so the caches refresh when your dependencies change.
+CircleCI expands `{{ checksum "go.sum" }}` before setup-go runs, in a `with:`
+value and in a `run` command alike:
 
 ```yaml
 - setup-go:
@@ -142,6 +144,7 @@ downloaded and built again on every run.
 | `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the version from its `go` directive. Overrides `--version`. |
 | `--detect-only` | false | Use the `go` already on `PATH` instead of installing one. `--version` and `--version-file` are ignored |
 | `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
+| `--api-url` | (go.dev) | Base URL to fetch Go from instead of go.dev, e.g. a mirror. It must serve go.dev's JSON release list (`?mode=json&include=all`) and the archives it names, both from that one base URL |
 | `--cache` | true | Set to `false` to disable all caching |
 | `--go-mod-cache` | true | Cache the Go module cache (`GOMODCACHE`) |
 | `--build-cache` | true | Cache the Go build cache (`GOCACHE`) |
