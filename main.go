@@ -25,7 +25,7 @@ import (
 
 type cli struct {
 	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable" example:"1.22"`
-	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from. Overrides --version when set." default:""`
+	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from: the higher of its go directive and toolchain line. Overrides --version when set." default:""`
 	DetectOnly  bool   `help:"Use the Go already on PATH, without installing. --version and --version-file are ignored."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
 	APIURL      string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
