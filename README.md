@@ -4,16 +4,38 @@ Installs a Go toolchain, puts it on `PATH` for the rest of the job, and caches
 what your build downloads and compiles.
 
 ```yaml
-steps:
-  - run:
-      name: Set up Go
-      command: circleci run setup-go@<version> -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
-  - run: go build ./...
-  - run: go test ./...
+version: 2.1
+
+functions:
+  setup-go: github.com/circleci-functions/setup-go@v0.6.0
+
+jobs:
+  build:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup-go:
+          with:
+            version: "1.24"
+            checksum: '{{ checksum "go.sum" }}'
+      - run: go build ./...
+      - run: go test ./...
 ```
 
 Later steps pick up `go` automatically, in whatever shell they run — there is
 nothing to source or export yourself.
+
+`circleci function add setup-go` writes the `functions:` entry for you, pinned
+to the latest release. Each [flag](#flags) is a `with:` key, named without its
+leading `--`.
+
+Where the `functions:` block isn't available, as on CircleCI Server, call
+setup-go by its full name with `circleci run` and pass the flags after `--`:
+
+```yaml
+- run: circleci run github.com/circleci-functions/setup-go@v0.6.0 -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
+```
 
 ## How it gets onto PATH
 
@@ -46,7 +68,9 @@ To keep the toolchain in step with your module, point at the file that already
 declares it:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --version-file go.mod
+- setup-go:
+    with:
+      version-file: go.mod
 ```
 
 ## Caching
@@ -59,13 +83,18 @@ times out still keeps what it downloaded and compiled.
 Pass `--checksum` so the caches refresh when your dependencies change:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --checksum '{{ checksum "go.sum" }}'
+- setup-go:
+    with:
+      checksum: '{{ checksum "go.sum" }}'
 ```
 
 Add `--golangci-lint-cache` if the job also runs golangci-lint:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --golangci-lint-cache --checksum '{{ checksum "go.sum" }}'
+- setup-go:
+    with:
+      golangci-lint-cache: true
+      checksum: '{{ checksum "go.sum" }}'
 ```
 
 Turn a single cache off with `--build-cache=false`, or all of them with
