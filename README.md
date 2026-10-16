@@ -62,6 +62,11 @@ Pass `--checksum` so the caches refresh when your dependencies change:
 - run: circleci run setup-go@<version> -- --checksum '{{ checksum "go.sum" }}'
 ```
 
+When the checksum changes, the module and build caches start from the newest
+entry saved in the current 72-hour window, so only what changed is downloaded
+or compiled again. Both rotate every 72 hours, which keeps them from growing
+without limit.
+
 Add `--golangci-lint-cache` if the job also runs golangci-lint:
 
 ```yaml
