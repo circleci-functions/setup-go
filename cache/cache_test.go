@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"gotest.tools/v3/assert"
@@ -14,12 +15,100 @@ import (
 	"github.com/circleci-functions/setup-go/cache"
 )
 
+// TestLintCacheDir pins the directory golangci-lint itself would use, so the
+// cache that is saved is the one it writes.
 func TestLintCacheDir(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	dir, err := cache.LintCacheDir()
+	t.Run("default", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("GOLANGCI_LINT_CACHE", "")
+		localAppData := t.TempDir()
+		t.Setenv("LocalAppData", localAppData)
+
+		want := map[string]string{
+			"linux":   filepath.Join(home, ".cache", "golangci-lint"),
+			"darwin":  filepath.Join(home, "Library", "Caches", "golangci-lint"),
+			"windows": filepath.Join(localAppData, "golangci-lint"),
+		}[runtime.GOOS]
+		if want == "" {
+			t.Skipf("no expected cache directory for %s", runtime.GOOS)
+		}
+
+		dir, err := cache.LintCacheDir()
+		assert.NilError(t, err)
+		assert.Equal(t, dir, want)
+	})
+
+	t.Run("XDG_CACHE_HOME", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("only Linux reads XDG_CACHE_HOME")
+		}
+		xdg := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", xdg)
+		t.Setenv("GOLANGCI_LINT_CACHE", "")
+
+		dir, err := cache.LintCacheDir()
+		assert.NilError(t, err)
+		assert.Equal(t, dir, filepath.Join(xdg, "golangci-lint"))
+	})
+
+	t.Run("GOLANGCI_LINT_CACHE", func(t *testing.T) {
+		want := t.TempDir()
+		t.Setenv("GOLANGCI_LINT_CACHE", want)
+
+		dir, err := cache.LintCacheDir()
+		assert.NilError(t, err)
+		assert.Equal(t, dir, want)
+	})
+
+	t.Run("GOLANGCI_LINT_CACHE off", func(t *testing.T) {
+		t.Setenv("GOLANGCI_LINT_CACHE", "off")
+
+		dir, err := cache.LintCacheDir()
+		assert.NilError(t, err)
+		assert.Equal(t, dir, "")
+	})
+
+	t.Run("GOLANGCI_LINT_CACHE relative", func(t *testing.T) {
+		t.Setenv("GOLANGCI_LINT_CACHE", "lint-cache")
+
+		_, err := cache.LintCacheDir()
+		assert.ErrorContains(t, err, "not an absolute path")
+	})
+}
+
+// TestRestoreAndSaveLintCache_FollowsTheEnv verifies that the lint cache
+// round-trips through the directory $GOLANGCI_LINT_CACHE names.
+func TestRestoreAndSaveLintCache_FollowsTheEnv(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	client := srv.Client()
+	ctx := context.Background()
+
+	cacheDir := filepath.Join(t.TempDir(), "lint")
+	t.Setenv("GOLANGCI_LINT_CACHE", cacheDir)
+	assert.NilError(t, os.MkdirAll(cacheDir, 0750))
+	assert.NilError(t, os.WriteFile(filepath.Join(cacheDir, "marker"), []byte("hit"), 0600))
+
+	cache.SaveLintCache(ctx, client, "", "checksum-a")
+	assert.NilError(t, os.RemoveAll(cacheDir))
+	cache.RestoreLintCache(ctx, client, "", "checksum-a")
+
+	got, err := os.ReadFile(filepath.Join(cacheDir, "marker")) //nolint:gosec
 	assert.NilError(t, err)
-	assert.Equal(t, dir, filepath.Join(home, ".cache", "golangci-lint"))
+	assert.Equal(t, string(got), "hit")
+}
+
+// TestSaveLintCache_OffSavesNothing verifies that GOLANGCI_LINT_CACHE=off,
+// under which golangci-lint caches nothing, registers no save.
+func TestSaveLintCache_OffSavesNothing(t *testing.T) {
+	srv := sdktest.NewServer(t)
+	client := srv.Client()
+	t.Setenv("GOLANGCI_LINT_CACHE", "off")
+
+	cache.SaveLintCache(context.Background(), client.AtTeardown(), "", "checksum-a")
+
+	assert.Equal(t, len(srv.PendingCacheSaves()), 0)
 }
 
 // TestRestoreAndSaveLintCache_RoundTrip verifies that saving the lint cache
