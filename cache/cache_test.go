@@ -82,9 +82,9 @@ func TestLintCache_CacheErrorIsNonFatal(t *testing.T) {
 }
 
 // TestGoModCache_RestoreAndSave is a table test covering the go mod cache's
-// checksum and job partitioning: a restore under the same checksum and job as
-// a prior save round-trips a marker file written into the cache dir; a
-// restore under a different checksum or job misses.
+// checksum and job partitioning: a restore under the same job as a prior save
+// round-trips a marker file written into the cache dir, falling back to it
+// when the checksum differs; a restore under a different job misses.
 func TestGoModCache_RestoreAndSave(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -103,12 +103,12 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 			wantRestored:    true,
 		},
 		{
-			name:            "DifferentChecksum_Misses",
+			name:            "DifferentChecksum_FallsBack",
 			saveChecksum:    "checksum-a",
 			restoreChecksum: "checksum-b",
 			saveJob:         "test",
 			restoreJob:      "test",
-			wantRestored:    false,
+			wantRestored:    true,
 		},
 		{
 			name:            "DifferentJob_Misses",
@@ -141,7 +141,7 @@ func TestGoModCache_RestoreAndSave(t *testing.T) {
 				assert.NilError(t, err)
 				assert.Equal(t, string(got), "hit")
 			} else {
-				assert.Assert(t, os.IsNotExist(err), "expected no marker file restored under a different checksum or job")
+				assert.Assert(t, os.IsNotExist(err), "expected no marker file restored under a different job")
 			}
 		})
 	}
