@@ -76,6 +76,46 @@ func TestReadVersionFile(t *testing.T) {
 			want:    "1.21",
 		},
 		{
+			name:    "toolchain newer than go",
+			content: "module example\n\ngo 1.22\n\ntoolchain go1.23.4\n",
+			want:    "1.23.4",
+		},
+		{
+			name:    "toolchain before go",
+			content: "module example\n\ntoolchain go1.23.4\n\ngo 1.22\n",
+			want:    "1.23.4",
+		},
+		{
+			name:    "toolchain older than go",
+			content: "module example\n\ngo 1.23.2\n\ntoolchain go1.22.5\n",
+			want:    "1.23.2",
+		},
+		{
+			name:    "toolchain names the go directive's minor",
+			content: "module example\n\ngo 1.22\n\ntoolchain go1.22.0\n",
+			want:    "1.22.0",
+		},
+		{
+			name:    "toolchain equal to go",
+			content: "module example\n\ngo 1.22.3\n\ntoolchain go1.22.3\n",
+			want:    "1.22.3",
+		},
+		{
+			name:    "go.work toolchain",
+			content: "go 1.21\n\ntoolchain go1.22.1\n\nuse .\n",
+			want:    "1.22.1",
+		},
+		{
+			name:    "toolchain without go",
+			content: "module example\n\ntoolchain go1.23.4\n",
+			want:    "1.23.4",
+		},
+		{
+			name:    "toolchain default is not a version",
+			content: "module example\n\ngo 1.22\n\ntoolchain default\n",
+			want:    "1.22",
+		},
+		{
 			name:    "no directive",
 			content: "module example\n",
 			wantErr: `no "go" directive found`,

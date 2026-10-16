@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"go/version"
 	"os"
 	"regexp"
 	"runtime"
@@ -14,10 +15,15 @@ import (
 	hc "github.com/circleci-functions/toolkit/httpcl"
 )
 
-var goDirectiveRe = regexp.MustCompile(`^go\s+(\d+\.\d+(?:\.\d+)?)`)
+var (
+	goDirectiveRe = regexp.MustCompile(`^go\s+(\d+\.\d+(?:\.\d+)?)`)
+	toolchainRe   = regexp.MustCompile(`^toolchain\s+go(\d+\.\d+(?:\.\d+)?)`)
+)
 
-// ReadVersionFile reads a Go version spec from the "go X.Y[.Z]" directive in
-// a go.mod or go.work file.
+// ReadVersionFile reads a Go version spec from a go.mod or go.work file: the
+// higher of its "go X.Y[.Z]" directive and its "toolchain goX.Y.Z" line. That
+// is the toolchain a later go command would switch to under GOTOOLCHAIN=auto,
+// so installing it means no later step downloads another.
 func ReadVersionFile(path string) (string, error) {
 	f, err := os.Open(path) // #nosec G304 — path is caller-supplied; this is a CLI tool
 	if err != nil {
@@ -25,16 +31,27 @@ func ReadVersionFile(path string) (string, error) {
 	}
 	defer f.Close()
 
+	var goVersion, toolchain string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		if m := goDirectiveRe.FindStringSubmatch(scanner.Text()); m != nil {
-			return m[1], nil
+		line := scanner.Text()
+		if m := goDirectiveRe.FindStringSubmatch(line); m != nil && goVersion == "" {
+			goVersion = m[1]
+		}
+		if m := toolchainRe.FindStringSubmatch(line); m != nil && toolchain == "" {
+			toolchain = m[1]
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("no \"go\" directive found in %s", path)
+	if goVersion == "" && toolchain == "" {
+		return "", fmt.Errorf("no \"go\" directive found in %s", path)
+	}
+	if version.Compare("go"+toolchain, "go"+goVersion) > 0 {
+		return toolchain, nil
+	}
+	return goVersion, nil
 }
 
 const (

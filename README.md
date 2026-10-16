@@ -49,6 +49,12 @@ declares it:
 - run: circleci run setup-go@<version> -- --version-file go.mod
 ```
 
+It takes the higher of the file's `go` directive and its `toolchain` line. A
+`toolchain` line names an exact release; a `go` directive is resolved as
+`--version` would resolve it. That is the toolchain a later `go` command would
+switch to under the default `GOTOOLCHAIN=auto`, so no later step downloads one
+of its own. setup-go does not set `GOTOOLCHAIN`.
+
 ## Caching
 
 Caching is on by default. setup-go restores the Go module cache and build cache
@@ -79,7 +85,7 @@ download entirely.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--version` | `stable` | Version spec: `stable`, `latest`, `1.24`, `1.24.3` |
-| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the version from its `go` directive. Overrides `--version`. |
+| `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; reads the version from its `go` directive or, if higher, its `toolchain` line. Overrides `--version`. |
 | `--detect-only` | false | Use the `go` already on `PATH` instead of installing one. `--version` and `--version-file` are ignored |
 | `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
 | `--cache` | true | Set to `false` to disable all caching |
