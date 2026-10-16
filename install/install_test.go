@@ -147,18 +147,47 @@ func TestInstall_ZipErrors(t *testing.T) {
 
 func TestDetect(t *testing.T) {
 	t.Run("go on PATH", func(t *testing.T) {
-		tmp := t.TempDir()
-		binDir := filepath.Join(tmp, "bin")
-		if err := os.MkdirAll(binDir, 0750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(binDir, "go"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
-			t.Fatal(err)
-		}
+		root := t.TempDir()
+		binDir := filepath.Join(root, "bin")
+		writeGoReportingRoot(t, binDir, root)
 		t.Setenv("PATH", binDir)
+
 		goroot, err := install.Detect()
 		assert.NilError(t, err)
-		assert.Equal(t, goroot, tmp)
+		assert.Equal(t, goroot, root)
+	})
+
+	t.Run("go on PATH is a symlink", func(t *testing.T) {
+		root := filepath.Join(t.TempDir(), "libexec")
+		writeGoReportingRoot(t, filepath.Join(root, "bin"), root)
+		pathDir := t.TempDir()
+		assert.NilError(t, os.Symlink(filepath.Join(root, "bin", "go"), filepath.Join(pathDir, "go")))
+		t.Setenv("PATH", pathDir)
+
+		goroot, err := install.Detect()
+		assert.NilError(t, err)
+		assert.Equal(t, goroot, root)
+	})
+
+	t.Run("ignores GOROOT in the environment", func(t *testing.T) {
+		root := t.TempDir()
+		binDir := filepath.Join(root, "bin")
+		writeGoReportingRoot(t, binDir, root)
+		t.Setenv("PATH", binDir)
+		t.Setenv("GOROOT", t.TempDir())
+
+		goroot, err := install.Detect()
+		assert.NilError(t, err)
+		assert.Equal(t, goroot, root)
+	})
+
+	t.Run("go fails to report its GOROOT", func(t *testing.T) {
+		binDir := t.TempDir()
+		assert.NilError(t, os.WriteFile(filepath.Join(binDir, "go"), []byte("#!/bin/sh\nexit 1\n"), 0755)) //nolint:gosec
+		t.Setenv("PATH", binDir)
+
+		_, err := install.Detect()
+		assert.ErrorContains(t, err, "for its GOROOT")
 	})
 
 	t.Run("no go on PATH", func(t *testing.T) {
@@ -166,6 +195,19 @@ func TestDetect(t *testing.T) {
 		_, err := install.Detect()
 		assert.ErrorContains(t, err, "no 'go' binary found on PATH")
 	})
+}
+
+// writeGoReportingRoot writes a go stub into binDir that reports root as its
+// GOROOT the way a real toolchain does: from its own location, ignoring
+// $GOROOT once it is dropped, and without switching toolchains.
+func writeGoReportingRoot(t *testing.T, binDir, root string) {
+	t.Helper()
+	assert.NilError(t, os.MkdirAll(binDir, 0750))
+	script := fmt.Sprintf("#!/bin/sh\n"+
+		"[ \"$GOTOOLCHAIN\" = local ] || exit 2\n"+
+		"[ \"$1 $2\" = \"env GOROOT\" ] || exit 1\n"+
+		"echo \"${GOROOT:-%s}\"\n", root)
+	assert.NilError(t, os.WriteFile(filepath.Join(binDir, "go"), []byte(script), 0755)) //nolint:gosec
 }
 
 func TestEnsure(t *testing.T) {

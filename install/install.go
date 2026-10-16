@@ -22,6 +22,7 @@ import (
 	"github.com/circleci-functions/toolkit/archive"
 	"github.com/circleci-functions/toolkit/sdk"
 
+	"github.com/circleci-functions/setup-go/goroot"
 	"github.com/circleci-functions/setup-go/goversion"
 )
 
@@ -50,13 +51,22 @@ func AlreadyInstalled(installDir string, v goversion.Version) bool {
 }
 
 // Detect returns the GOROOT of the go binary already on PATH, for a job that
-// brings its own toolchain.
+// brings its own toolchain. It asks the binary rather than inferring the root
+// from where PATH finds it, since that is often a symlink into the real
+// GOROOT, as with Homebrew and distro packages.
 func Detect() (string, error) {
 	p, err := exec.LookPath("go")
 	if err != nil {
 		return "", fmt.Errorf("no 'go' binary found on PATH")
 	}
-	return filepath.Dir(filepath.Dir(p)), nil
+	root, err := goroot.Of(p)
+	if err != nil {
+		return "", fmt.Errorf("ask %s for its GOROOT: %w", p, err)
+	}
+	if root == "" {
+		return "", fmt.Errorf("%s reported no GOROOT", p)
+	}
+	return root, nil
 }
 
 // Ensure returns the GOROOT for v, installing it if not already present.
