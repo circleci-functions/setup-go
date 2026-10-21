@@ -11,7 +11,8 @@ import (
 // reportGoPathBin makes what `go install` writes reachable, or says why it is
 // not. Its binaries do not exist yet, so the directory itself has to be
 // somewhere PATH already looks. Best effort: only the toolchain resolving is
-// guaranteed.
+// guaranteed. An empty linkedDir is one setup-go didn't link into, which it
+// leaves alone.
 func reportGoPathBin(goPath, linkedDir string, dirs []string) {
 	bin := GoPathBin(goPath)
 	if bin == "" || onPath(bin, dirs) {
@@ -27,7 +28,7 @@ func reportGoPathBin(goPath, linkedDir string, dirs []string) {
 
 	// `go install` runs as the job's own user, so a directory it cannot write
 	// to is no good here.
-	if !pathlink.Writable(linkedDir) {
+	if linkedDir == "" || !pathlink.Writable(linkedDir) {
 		fmt.Fprintf(os.Stderr,
 			"setup-go: %s is not on PATH, so binaries from `go install` need their full path\n", bin)
 		return

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/circleci-functions/toolkit/pathlink"
@@ -34,6 +35,12 @@ func Link(opts Options) (pathlink.Result, error) {
 		return pathlink.Result{}, fmt.Errorf("goroot: GoRoot is required")
 	}
 
+	// A toolchain PATH already resolved, as under --detect-only, lives in a
+	// directory that belongs to Homebrew, a distro package or the image, and
+	// pointing GOPATH/bin there would have `go install` write among its files.
+	dirs := pathlink.SearchDirs(opts.Path)
+	preinstalled := resolvesTo(dirs, opts.GoRoot)
+
 	res, err := pathlink.Ensure(pathlink.Options{
 		Names:     binaries,
 		FromDir:   filepath.Join(opts.GoRoot, "bin"),
@@ -46,8 +53,25 @@ func Link(opts Options) (pathlink.Result, error) {
 		return res, err
 	}
 
-	reportGoPathBin(opts.GoPath, res.Dir, pathlink.SearchDirs(opts.Path))
+	linkedDir := res.Dir
+	if preinstalled {
+		linkedDir = ""
+	}
+	reportGoPathBin(opts.GoPath, linkedDir, dirs)
 	return res, nil
+}
+
+// resolvesTo reports whether the go PATH resolves is the toolchain at goRoot.
+func resolvesTo(dirs []string, goRoot string) bool {
+	i := pathlink.IndexOf(dirs, "go")
+	if i < 0 {
+		return false
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return verifyGoRoot(goRoot)(filepath.Join(dirs[i], name)) == nil
 }
 
 // preferredDirs puts GOPATH/bin first: the toolchain already writes there, so
