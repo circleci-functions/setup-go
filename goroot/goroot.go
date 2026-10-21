@@ -39,7 +39,7 @@ func Link(opts Options) (pathlink.Result, error) {
 	// directory that belongs to Homebrew, a distro package or the image, and
 	// pointing GOPATH/bin there would have `go install` write among its files.
 	dirs := pathlink.SearchDirs(opts.Path)
-	preinstalled := resolvesTo(dirs, opts.GoRoot)
+	preinstalled := resolvesTo(dirs, filepath.Join(opts.GoRoot, "bin"))
 
 	res, err := pathlink.Ensure(pathlink.Options{
 		Names:     binaries,
@@ -61,8 +61,10 @@ func Link(opts Options) (pathlink.Result, error) {
 	return res, nil
 }
 
-// resolvesTo reports whether the go PATH resolves is the toolchain at goRoot.
-func resolvesTo(dirs []string, goRoot string) bool {
+// resolvesTo reports whether the go PATH resolves is already the one in
+// fromDir, through any symlinks, as with Homebrew and distro packages. It
+// reads the filesystem rather than running go.
+func resolvesTo(dirs []string, fromDir string) bool {
 	i := pathlink.IndexOf(dirs, "go")
 	if i < 0 {
 		return false
@@ -71,7 +73,11 @@ func resolvesTo(dirs []string, goRoot string) bool {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	return verifyGoRoot(goRoot)(filepath.Join(dirs[i], name)) == nil
+	bin, err := filepath.EvalSymlinks(filepath.Join(dirs[i], name))
+	if err != nil {
+		return false
+	}
+	return sameDir(filepath.Dir(bin), fromDir)
 }
 
 // preferredDirs puts GOPATH/bin first: the toolchain already writes there, so
