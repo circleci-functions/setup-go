@@ -112,6 +112,22 @@ func TestLink_PointsAMissingGoPathBinAtThePathDirectory(t *testing.T) {
 	assert.Equal(t, target, got.Dir)
 }
 
+// Under --detect-only the toolchain is already on PATH, from a directory that
+// belongs to Homebrew or a distro package. GOPATH/bin must not become that
+// directory, or `go install` writes among their binaries.
+func TestLink_LeavesGoPathBinAloneForAToolchainAlreadyOnPath(t *testing.T) {
+	root := fakeGoRoot(t)
+	goPath := filepath.Join(t.TempDir(), "gopath")
+	bin := filepath.Join(root, "bin")
+
+	got, err := goroot.Link(goroot.Options{GoRoot: root, GoPath: goPath, Path: bin})
+	assert.NilError(t, err)
+	assert.Equal(t, got.Dir, bin)
+
+	_, err = os.Lstat(filepath.Join(goPath, "bin"))
+	assert.Assert(t, os.IsNotExist(err), "GOPATH/bin must not point at the toolchain's directory")
+}
+
 func TestLink_LeavesAnExistingGoPathBinAlone(t *testing.T) {
 	root := fakeGoRoot(t)
 	goPath := t.TempDir()

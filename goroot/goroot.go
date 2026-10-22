@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/circleci-functions/toolkit/pathlink"
@@ -34,6 +35,12 @@ func Link(opts Options) (pathlink.Result, error) {
 		return pathlink.Result{}, fmt.Errorf("goroot: GoRoot is required")
 	}
 
+	// A toolchain PATH already resolved, as under --detect-only, lives in a
+	// directory that belongs to Homebrew, a distro package or the image, and
+	// pointing GOPATH/bin there would have `go install` write among its files.
+	dirs := pathlink.SearchDirs(opts.Path)
+	preinstalled := resolvesTo(dirs, filepath.Join(opts.GoRoot, "bin"))
+
 	res, err := pathlink.Ensure(pathlink.Options{
 		Names:     binaries,
 		FromDir:   filepath.Join(opts.GoRoot, "bin"),
@@ -46,8 +53,31 @@ func Link(opts Options) (pathlink.Result, error) {
 		return res, err
 	}
 
-	reportGoPathBin(opts.GoPath, res.Dir, pathlink.SearchDirs(opts.Path))
+	linkedDir := res.Dir
+	if preinstalled {
+		linkedDir = ""
+	}
+	reportGoPathBin(opts.GoPath, linkedDir, dirs)
 	return res, nil
+}
+
+// resolvesTo reports whether the go PATH resolves is already the one in
+// fromDir, through any symlinks, as with Homebrew and distro packages. It
+// reads the filesystem rather than running go.
+func resolvesTo(dirs []string, fromDir string) bool {
+	i := pathlink.IndexOf(dirs, "go")
+	if i < 0 {
+		return false
+	}
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	bin, err := filepath.EvalSymlinks(filepath.Join(dirs[i], name))
+	if err != nil {
+		return false
+	}
+	return sameDir(filepath.Dir(bin), fromDir)
 }
 
 // preferredDirs puts GOPATH/bin first: the toolchain already writes there, so
@@ -70,24 +100,33 @@ func GoPathBin(goPath string) string {
 	return ""
 }
 
-// verifyGoRoot asks the resolved toolchain for its GOROOT. A toolchain honours
-// $GOROOT over its own location, so it is dropped: leaving it set would report
-// the caller's GOROOT for any binary.
+// Of asks the go binary bin for its GOROOT. A toolchain honours $GOROOT over
+// its own location, so it is dropped: leaving it set would report the caller's
+// GOROOT for any binary.
 //
-// The first binary checked is whatever PATH held before linking, often an
-// older toolchain shipped with the image. GOTOOLCHAIN=local stops it switching
-// to the version the job's go.mod asks for, which would silently download that
-// toolchain into the module cache just to answer the question.
+// bin may be an older toolchain shipped with the image. GOTOOLCHAIN=local
+// stops it switching to the version the job's go.mod asks for, which would
+// silently download that toolchain into the module cache just to answer the
+// question.
+func Of(bin string) (string, error) {
+	cmd := pathlink.Command(bin, "env", "GOROOT")
+	cmd.Env = append(withoutGoRoot(os.Environ()), "GOTOOLCHAIN=local")
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// verifyGoRoot checks that bin, a go that PATH resolves to, is the toolchain
+// at goRoot.
 func verifyGoRoot(goRoot string) func(string) error {
 	return func(bin string) error {
-		cmd := pathlink.Command(bin, "env", "GOROOT")
-		cmd.Env = append(withoutGoRoot(os.Environ()), "GOTOOLCHAIN=local")
-
-		out, err := cmd.Output()
+		got, err := Of(bin)
 		if err != nil {
 			return fmt.Errorf("could not report its GOROOT: %w", err)
 		}
-		got := strings.TrimSpace(string(out))
 		if !sameDir(got, goRoot) {
 			return fmt.Errorf("has GOROOT %q, not %q", got, goRoot)
 		}

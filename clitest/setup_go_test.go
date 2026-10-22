@@ -92,6 +92,28 @@ func TestCLI_DetectOnly_NeedsNoGoDev(t *testing.T) {
 	assert.Equal(t, godev.releaseRequests.Load(), int64(0))
 }
 
+// TestCLI_DetectOnly_GoIsASymlink pins that --detect-only accepts a go on
+// PATH that is a symlink into its GOROOT, as Homebrew and distro packages
+// install it, and leaves that symlink in place.
+func TestCLI_DetectOnly_GoIsASymlink(t *testing.T) {
+	_, run := sandbox(t)
+	realBin := stubGoOnlyBinDir(t)
+	assert.NilError(t, os.WriteFile(filepath.Join(realBin, "gofmt"), []byte("#!/bin/sh\n"), 0750))
+
+	binDir := t.TempDir()
+	for _, name := range []string{"go", "gofmt"} {
+		assert.NilError(t, os.Symlink(filepath.Join(realBin, name), filepath.Join(binDir, name)))
+	}
+
+	out, err := run(t, map[string]string{"PATH": binDir, "GOPATH": ""}, "--detect-only", "--cache=false")
+	assert.NilError(t, err, "got: %s", out)
+	assert.Assert(t, strings.Contains(out, "resolve from "+binDir), "got: %s", out)
+
+	target, err := os.Readlink(filepath.Join(binDir, "go"))
+	assert.NilError(t, err)
+	assert.Equal(t, target, filepath.Join(realBin, "go"))
+}
+
 // TestCLI_VersionFile_ReadsGoMod verifies that --version-file reads the go
 // directive from a go.mod file and uses it to select the toolchain version.
 func TestCLI_VersionFile_ReadsGoMod(t *testing.T) {
@@ -203,11 +225,11 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-// stubGoOnlyBinDir writes a `go` stub (under a "bin" subdirectory, so
-// --detect-only's GOROOT inference — two dirs up from the resolved binary —
-// lands on a sane path) that answers `go env` queries. It contains nothing
-// else, in particular no cc/gcc/clang, so PATH can be pointed at the
-// returned "bin" dir to simulate an environment with no C toolchain.
+// stubGoOnlyBinDir writes a `go` stub under a "bin" subdirectory that answers
+// `go env` queries, reporting the directory above it as its GOROOT wherever it
+// is run from, as a real toolchain does. It contains nothing else, in
+// particular no cc/gcc/clang, so PATH can be pointed at the returned "bin" dir
+// to simulate an environment with no C toolchain.
 func stubGoOnlyBinDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -216,6 +238,7 @@ func stubGoOnlyBinDir(t *testing.T) string {
 		t.Fatalf("mkdir bin: %v", err)
 	}
 	script := `#!/bin/sh
+root='` + dir + `'
 case "$1" in
   env)
     shift
@@ -228,7 +251,7 @@ case "$1" in
         GOMODCACHE) echo "/fake/go/pkg/mod" ;;
         GOCACHE)    echo "/fake/cache/go-build" ;;
         GOPATH)     echo "/fake/go" ;;
-        GOROOT)     echo "$(cd "${0%/*}/.." && pwd)" ;;
+        GOROOT)     echo "$root" ;;
         *)          echo "" ;;
       esac
     done

@@ -14,8 +14,9 @@ import (
 // with no other change. Matches the circleci/go orb's
 // {{ epoch | round "72h" }} cache key component.
 //
-// For the build cache this is the only mechanism that ever reclaims space, so
-// buildRestoreKeys is careful never to reach across a window. See its comment.
+// For the module and build caches this is the only mechanism that ever
+// reclaims space, so restoreKeys is careful never to reach across a window.
+// See its comment.
 const cacheRotation = 72 * time.Hour
 
 // Saver saves paths under a cache key. Both *sdk.Client and the *sdk.Teardown
@@ -25,14 +26,28 @@ type Saver interface {
 	SaveCache(ctx context.Context, key string, paths []string, opts ...sdk.CacheOption) error
 }
 
-// LintCacheDir returns golangci-lint's cache directory. It currently always
-// returns the tool's own default, ~/.cache/golangci-lint.
+// LintCacheDir returns the directory golangci-lint caches into, by the rule
+// golangci-lint itself follows: $GOLANGCI_LINT_CACHE when it is set, and
+// otherwise golangci-lint under os.UserCacheDir, which is $XDG_CACHE_HOME or
+// ~/.cache on Linux, ~/Library/Caches on macOS and %LocalAppData% on Windows.
+// It returns "" when $GOLANGCI_LINT_CACHE is "off", since golangci-lint then
+// caches nothing, and an error when it is a relative path, which golangci-lint
+// rejects.
 func LintCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home directory: %w", err)
+	if dir := os.Getenv("GOLANGCI_LINT_CACHE"); dir != "" {
+		switch {
+		case dir == "off":
+			return "", nil
+		case !filepath.IsAbs(dir):
+			return "", fmt.Errorf("GOLANGCI_LINT_CACHE is not an absolute path: %q", dir)
+		}
+		return dir, nil
 	}
-	return filepath.Join(home, ".cache", "golangci-lint"), nil
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user cache directory: %w", err)
+	}
+	return filepath.Join(dir, "golangci-lint"), nil
 }
 
 // RestoreLintCache restores golangci-lint's cache directory from the
@@ -40,7 +55,13 @@ func LintCacheDir() (string, error) {
 // best-effort: a cache-call failure is logged to stderr and never blocks the
 // test run.
 func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)},
+	dir, err := LintCacheDir()
+	if err != nil || dir == "" {
+		sdk.LogCacheErr("restore lint", err)
+		return
+	}
+
+	_, err = client.RestoreCache(ctx, []string{lintCacheKey(key, checksum)},
 		sdk.WithStepName("Restoring golangci-lint cache"))
 	sdk.LogCacheErr("restore lint", err)
 }
@@ -48,9 +69,8 @@ func RestoreLintCache(ctx context.Context, client *sdk.Client, key, checksum str
 // SaveLintCache saves golangci-lint's cache directory to the CircleCI job
 // cache.
 func SaveLintCache(ctx context.Context, saver Saver, key, checksum string) {
-	// TODO: need to be able to set the cache dir other than the default.
 	dir, err := LintCacheDir()
-	if err != nil {
+	if err != nil || dir == "" {
 		sdk.LogCacheErr("save lint", err)
 		return
 	}
@@ -79,8 +99,11 @@ func rotationEpoch() int64 {
 	return time.Now().Unix() / secs * secs
 }
 
+// RestoreGoModCache restores the go module cache (GOMODCACHE), trying the
+// ordered fallback keys from restoreKeys so a dependency bump only downloads
+// the modules that changed.
 func RestoreGoModCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, []string{goModCacheKey(key, checksum)},
+	_, err := client.RestoreCache(ctx, restoreKeys("go-mod", key, checksum),
 		sdk.WithStepName("Restoring go module cache"))
 	sdk.LogCacheErr("restore go mod", err)
 }
@@ -91,10 +114,12 @@ func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string)
 	sdk.LogCacheErr("save go mod", err)
 }
 
-// goModCacheKey is the circleci/go orb's go-mod key plus the rotating epoch the
-// orb only applies to its other caches:
+// goModCacheKey is the key the module cache saves under. It carries the
+// circleci/go orb's go-mod key components plus the rotating epoch the orb only
+// applies to its other caches, ahead of the checksum for the reason given on
+// buildCacheKey:
 //
-// v1-<< parameters.key >>-go-mod-{{ .Environment.CIRCLE_JOB }}-{{ arch }}-<< parameters.checksum >>-{{ epoch | round "72h" }}
+//	v1-<key>-go-mod-<CIRCLE_JOB>-<arch>-<rotating epoch>-<checksum>
 //
 // Scoping by job, as the orb does since CircleCI-Public/go-orb#124, stops jobs
 // with different images or OSes that share a checksum from colliding on one
@@ -103,22 +128,15 @@ func SaveGoModCache(ctx context.Context, saver Saver, key, checksum, dir string)
 // Without the epoch a caller that passes no checksum has a constant key, and
 // since a save is skipped when the key already exists the cache would keep its
 // first contents forever.
-//
-// A restore tries this exact key and nothing broader, and that is what stops
-// the cache growing without limit. Unlike the build cache, the module cache
-// has no fallback tier: a dependency bump or a new rotation window starts
-// from empty, so the teardown save only ever uploads what this job
-// downloaded. A fallback to an earlier checksum or window would carry every
-// stale module forward into each new entry, and nothing would ever drop them.
 func goModCacheKey(key, checksum string) string {
-	return fmt.Sprintf("%s-%s-%d", cacheKeyBase("go-mod", key), checksum, rotationEpoch())
+	return windowPrefix("go-mod", key) + checksum
 }
 
 // RestoreBuildCache restores the go build cache (GOCACHE), trying the ordered
-// fallback keys from buildRestoreKeys so a dependency bump warm-starts from a
-// near miss instead of compiling from cold.
+// fallback keys from restoreKeys so a dependency bump warm-starts from a near
+// miss instead of compiling from cold.
 func RestoreBuildCache(ctx context.Context, client *sdk.Client, key, checksum string) {
-	_, err := client.RestoreCache(ctx, buildRestoreKeys(key, checksum),
+	_, err := client.RestoreCache(ctx, restoreKeys("go-build", key, checksum),
 		sdk.WithStepName("Restoring go build cache"))
 	sdk.LogCacheErr("restore go build", err)
 }
@@ -137,26 +155,26 @@ func SaveBuildCache(ctx context.Context, saver Saver, key, checksum, dir string)
 //
 // The order matters because prefix matching can only drop trailing components.
 // With the epoch last, a key broad enough to match any checksum is also broad
-// enough to match any window, which buildRestoreKeys must not allow.
+// enough to match any window, which restoreKeys must not allow.
 func buildCacheKey(key, checksum string) string {
-	return buildWindowPrefix(key) + checksum
+	return windowPrefix("go-build", key) + checksum
 }
 
-// buildWindowPrefix matches every build cache key saved in the current
-// rotation window: v1-<key>-go-build-<CIRCLE_JOB>-<arch>-<epoch>-. The epoch
-// is a fixed-width unix timestamp and the prefix ends on the separator that
-// follows it, so it cannot match a neighbouring window's keys.
-func buildWindowPrefix(key string) string {
-	return fmt.Sprintf("%s-%d-", cacheKeyBase("go-build", key), rotationEpoch())
+// windowPrefix matches every key tool's cache saved in the current rotation
+// window: v1-<key>-<tool>-<CIRCLE_JOB>-<arch>-<epoch>-. The epoch is a
+// fixed-width unix timestamp and the prefix ends on the separator that follows
+// it, so it cannot match a neighbouring window's keys.
+func windowPrefix(tool, key string) string {
+	return fmt.Sprintf("%s-%d-", cacheKeyBase(tool, key), rotationEpoch())
 }
 
-// buildRestoreKeys returns the keys a restore tries in order. CircleCI matches
-// each key as a prefix and takes the most recent entry matching the first key
-// that hits at all:
+// restoreKeys returns the keys a restore of tool's cache tries in order.
+// CircleCI matches each key as a prefix and takes the most recent entry
+// matching the first key that hits at all:
 //
 //  1. exact — same deps, same rotation window
 //  2. same window, any deps — after a dependency bump only the changed
-//     modules recompile
+//     modules download or recompile
 //
 // Entry 1 is the save key, so an exact round-trip still hits on a cache that
 // only matches exactly.
@@ -165,15 +183,15 @@ func buildWindowPrefix(key string) string {
 // cache from growing without limit. A restore lands its entry on disk and the
 // teardown save writes the whole directory back, so a tier that matched an
 // earlier window would carry that window's contents forward into the next one,
-// forever. Nothing downstream would reclaim them: GOCACHE self-trims by mtime
-// (cmd/go/internal/cache.Trim drops entries unused for five days), but a
-// restored file's mtime is its restore time rather than its original one, so
-// no entry in a restored cache ever looks old enough to collect. Rotation is
-// the only thing that shrinks this cache, and it only works if prefix
-// matching stops at the window.
-func buildRestoreKeys(key, checksum string) []string {
+// forever. Nothing downstream would reclaim them. GOMODCACHE never trims
+// itself. GOCACHE self-trims by mtime (cmd/go/internal/cache.Trim drops entries
+// unused for five days), but a restored file's mtime is its restore time
+// rather than its original one, so no entry in a restored cache ever looks old
+// enough to collect. Rotation is the only thing that shrinks these caches, and
+// it only works if prefix matching stops at the window.
+func restoreKeys(tool, key, checksum string) []string {
 	return []string{
-		buildCacheKey(key, checksum),
-		buildWindowPrefix(key),
+		windowPrefix(tool, key) + checksum,
+		windowPrefix(tool, key),
 	}
 }

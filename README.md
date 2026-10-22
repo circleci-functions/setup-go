@@ -84,11 +84,22 @@ Pass `--checksum` so the caches refresh when your dependencies change:
 - run: circleci run setup-go@<version> -- --checksum '{{ checksum "go.sum" }}'
 ```
 
+When the checksum changes, the module and build caches start from the newest
+entry saved in the current 72-hour window, so only what changed is downloaded
+or compiled again. Both rotate every 72 hours, which keeps them from growing
+without limit.
+
 Add `--golangci-lint-cache` if the job also runs golangci-lint:
 
 ```yaml
 - run: circleci run setup-go@<version> -- --golangci-lint-cache --checksum '{{ checksum "go.sum" }}'
 ```
+
+It caches the directory golangci-lint uses: `$GOLANGCI_LINT_CACHE` if set, and
+otherwise `golangci-lint` under the user cache directory (`$XDG_CACHE_HOME` or
+`~/.cache` on Linux, `~/Library/Caches` on macOS, `%LocalAppData%` on Windows).
+`GOLANGCI_LINT_CACHE=off` turns it off. Set `GOLANGCI_LINT_CACHE` on the job,
+not on a later step, so setup-go sees the same value golangci-lint does.
 
 Turn a single cache off with `--build-cache=false`, or all of them with
 `--cache=false`. Cache problems never fail the job.
