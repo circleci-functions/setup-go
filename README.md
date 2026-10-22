@@ -4,16 +4,38 @@ Installs a Go toolchain, puts it on `PATH` for the rest of the job, and caches
 what your build downloads and compiles.
 
 ```yaml
-steps:
-  - run:
-      name: Set up Go
-      command: circleci run setup-go@<version> -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
-  - run: go build ./...
-  - run: go test ./...
+version: 2.1
+
+functions:
+  setup-go: github.com/circleci-functions/setup-go@v0.6.0
+
+jobs:
+  build:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup-go:
+          with:
+            version: "1.24"
+            checksum: '{{ checksum "go.sum" }}'
+      - run: go build ./...
+      - run: go test ./...
 ```
 
 Later steps pick up `go` automatically, in whatever shell they run — there is
 nothing to source or export yourself.
+
+`circleci function add setup-go` writes the `functions:` entry for you, pinned
+to the latest release. Each [flag](#flags) is a `with:` key, named without its
+leading `--`.
+
+Where the `functions:` block isn't available, as on CircleCI Server, call
+setup-go by its full name with `circleci run` and pass the flags after `--`:
+
+```yaml
+- run: circleci run github.com/circleci-functions/setup-go@v0.6.0 -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
+```
 
 ## How it gets onto PATH
 
@@ -50,7 +72,9 @@ To keep the toolchain in step with your module, point at the file that already
 declares it:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --version-file go.mod
+- setup-go:
+    with:
+      version-file: go.mod
 ```
 
 It takes the higher of the file's `go` directive and its `toolchain` line,
@@ -78,10 +102,14 @@ before your steps run, and saves them once the job is done — so nothing in
 between needs a cache step of its own, and a job that fails, is cancelled or
 times out still keeps what it downloaded and compiled.
 
-Pass `--checksum` so the caches refresh when your dependencies change:
+Pass `--checksum` so the caches refresh when your dependencies change.
+CircleCI expands `{{ checksum "go.sum" }}` before setup-go runs, in a `with:`
+value and in a `run` command alike:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --checksum '{{ checksum "go.sum" }}'
+- setup-go:
+    with:
+      checksum: '{{ checksum "go.sum" }}'
 ```
 
 When the checksum changes, the module and build caches start from the newest
@@ -92,7 +120,10 @@ without limit.
 Add `--golangci-lint-cache` if the job also runs golangci-lint:
 
 ```yaml
-- run: circleci run setup-go@<version> -- --golangci-lint-cache --checksum '{{ checksum "go.sum" }}'
+- setup-go:
+    with:
+      golangci-lint-cache: true
+      checksum: '{{ checksum "go.sum" }}'
 ```
 
 It caches the directory golangci-lint uses: `$GOLANGCI_LINT_CACHE` if set, and
@@ -104,8 +135,39 @@ not on a later step, so setup-go sees the same value golangci-lint does.
 Turn a single cache off with `--build-cache=false`, or all of them with
 `--cache=false`. Cache problems never fail the job.
 
+Because the build cache is restored, `go test` can print `ok <package> (cached)`
+instead of running a package's tests again. Go replays an earlier result when
+nothing the tests depend on has changed: the code, its dependencies, and the
+files and environment variables the tests read. With `-json` or `-v`, which
+gotestsum uses, the replay still lists every test, so test reports stay
+complete. To run the tests every time, pass `-count=1`:
+
+```yaml
+- run: go test -count=1 ./...
+```
+
+Compiling still uses the build cache, so this costs only the test run itself.
+
 The installed toolchain is cached too, so a fresh executor usually skips the
 download entirely.
+
+## Test results
+
+setup-go doesn't write test results itself. To see them in CircleCI, run the
+tests through [gotestsum](https://github.com/gotestyourself/gotestsum), which
+writes JUnit XML, and store the file it writes:
+
+```yaml
+- run: go run gotest.tools/gotestsum@v1.13.0 --junitfile test-results/junit.xml -- ./...
+- store_test_results:
+    path: test-results
+```
+
+If your module declares gotestsum as a tool, with
+`go get -tool gotest.tools/gotestsum`, run `go tool gotestsum` instead, so
+go.mod pins its version. Either way there is nothing to install: Go is already
+on `PATH`, and the module and build caches keep gotestsum from being
+downloaded and built again on every run.
 
 ## Flags
 
@@ -115,6 +177,7 @@ download entirely.
 | `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; installs the newest patch its `go` directive allows or, if higher, its `toolchain` line. Overrides `--version`. |
 | `--detect-only` | false | Use the `go` already on `PATH` instead of installing one. `--version` and `--version-file` are ignored |
 | `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
+| `--api-url` | (go.dev) | Base URL to fetch Go from instead of go.dev, e.g. a mirror. It must serve go.dev's JSON release list (`?mode=json&include=all`) and the archives it names, both from that one base URL |
 | `--cache` | true | Set to `false` to disable all caching |
 | `--go-mod-cache` | true | Cache the Go module cache (`GOMODCACHE`) |
 | `--build-cache` | true | Cache the Go build cache (`GOCACHE`) |

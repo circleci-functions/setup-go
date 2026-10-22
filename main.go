@@ -28,7 +28,7 @@ type cli struct {
 	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from: the newest patch its go directive allows, or its toolchain line if higher. Overrides --version when set." default:""`
 	DetectOnly  bool   `help:"Use the Go already on PATH, without installing. --version and --version-file are ignored."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
-	APIURL      string `name:"api-url" help:"Override go.dev release API base URL (also overrides tarball download base)." hidden:"" default:""`
+	APIURL      string `name:"api-url" help:"Fetch the Go release list and archives from this base URL instead of go.dev, e.g. a mirror." default:""`
 	BinDir      string `name:"bin-dir" help:"Link go/gofmt into this directory instead of discovering one on PATH." hidden:"" default:""`
 	CacheNonce  string `name:"cache-nonce" help:"Partition the toolchain cache, so a test run cannot restore an earlier run's toolchain." hidden:"" default:""`
 
