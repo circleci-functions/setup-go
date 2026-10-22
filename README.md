@@ -28,6 +28,10 @@ existing toolchain, that toolchain is taken over instead, so the link never
 lands somewhere another tool owns. setup-go then asks the `go` that `PATH`
 resolves for its `GOROOT`, and fails unless it is the one just installed.
 
+When an existing binary is replaced, it is kept as `<name>.pathlink-old` in
+the same directory. If the link directory is not writable, setup-go falls back
+to `sudo -n ln`; on macOS system directories, sudo is skipped.
+
 Nothing is written to `$BASH_ENV`. If a job needs the toolchain's location
 rather than just `go`, ask the toolchain: `go env GOROOT`.
 
