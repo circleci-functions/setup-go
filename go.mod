@@ -3,7 +3,7 @@ module github.com/circleci-functions/setup-go
 go 1.26.4
 
 require (
-	github.com/alecthomas/kong v1.15.0
+	github.com/alecthomas/kong v1.16.1
 	github.com/circleci-functions/toolkit v0.3.0
 	gotest.tools/v3 v3.5.2
 )
