@@ -1,10 +1,12 @@
-// Command setup-go installs a Go toolchain and links it onto PATH, so later
-// steps in the job pick it up whatever shell they run in.
+// Command setup-go puts a Go toolchain on PATH, so later steps in the job pick
+// it up whatever shell they run in. It installs and links the version asked
+// for, and otherwise uses the Go the image already has.
 //
 // Supported platforms: linux, darwin, windows.
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -23,10 +25,14 @@ import (
 	"github.com/circleci-functions/setup-go/install"
 )
 
+// defaultVersion is installed when no version is asked for and PATH has no
+// usable Go.
+const defaultVersion = "stable"
+
 type cli struct {
-	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest)." default:"stable" example:"1.22"`
+	Version     string `help:"Go version spec (e.g. 1.22, 1.22.3, stable, latest). When neither this nor --version-file is set, the Go already on PATH is used, and stable is installed only if there is none." default:"" example:"1.22"`
 	VersionFile string `name:"version-file" help:"Path to a go.mod or go.work file to read the Go version from: the newest patch its go directive allows, or its toolchain line if higher. Overrides --version when set." default:""`
-	DetectOnly  bool   `help:"Use the Go already on PATH, without installing. --version and --version-file are ignored."`
+	DetectOnly  bool   `help:"Use the Go already on PATH, without installing, and fail if there is none. --version and --version-file are ignored."`
 	InstallDir  string `help:"Base directory for Go toolchain installs." default:"~/.cache/setup-go"`
 	APIURL      string `name:"api-url" help:"Fetch the Go release list and archives from this base URL instead of go.dev, e.g. a mirror." default:""`
 	BinDir      string `name:"bin-dir" help:"Link go/gofmt into this directory instead of discovering one on PATH." hidden:"" default:""`
@@ -46,8 +52,8 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 		return err
 	}
 
-	// The toolchain just installed: until it is linked, `go` still resolves to
-	// whatever the image shipped.
+	// The toolchain chosen above: when it was just installed, `go` still
+	// resolves to whatever the image shipped until it is linked.
 	goBinary := filepath.Join(gorootDir, "bin", install.GoBinary())
 	env, err := goenv.LoadFrom(ctx, goBinary)
 	if err != nil {
@@ -69,11 +75,22 @@ func (c *cli) Run(ctx context.Context, client *sdk.Client) error {
 	return c.setupJobCaches(ctx, client, env)
 }
 
-// toolchain returns the GOROOT of the toolchain to set up. Under --detect-only
-// that is the one already on PATH, so no version spec is resolved at all.
+// toolchain returns the GOROOT of the toolchain to set up. Under --detect-only,
+// or when no version is asked for, that is the one already on PATH, so no
+// version spec is resolved at all: most jobs run on an image that ships the Go
+// they chose, and installing stable over it would silently change their Go.
 func (c *cli) toolchain(ctx context.Context, client *sdk.Client) (string, error) {
 	if c.DetectOnly {
 		return install.Detect()
+	}
+
+	if c.Version == "" && c.VersionFile == "" {
+		root, err := install.Detect()
+		if err == nil {
+			fmt.Fprintf(os.Stderr, "setup-go: using the Go already on PATH, at %s; pass --version or --version-file to install one\n", root)
+			return root, nil
+		}
+		fmt.Fprintf(os.Stderr, "setup-go: %v; installing %s\n", err, defaultVersion)
 	}
 
 	ver, err := c.resolve(ctx)
@@ -90,12 +107,12 @@ func (c *cli) toolchain(ctx context.Context, client *sdk.Client) (string, error)
 }
 
 // resolve picks the release to install: the one --version-file asks for when
-// it is set, and --version otherwise.
+// it is set, and --version, or defaultVersion without one, otherwise.
 func (c *cli) resolve(ctx context.Context) (*goversion.Version, error) {
 	var ver *goversion.Version
 	var err error
 	if c.VersionFile == "" {
-		ver, err = goversion.ResolveVersion(ctx, c.APIURL, c.Version)
+		ver, err = goversion.ResolveVersion(ctx, c.APIURL, cmp.Or(c.Version, defaultVersion))
 	} else {
 		req, readErr := goversion.ReadVersionFile(c.VersionFile)
 		if readErr != nil {
@@ -155,7 +172,7 @@ func run(ctx context.Context, client *sdk.Client) error {
 	var flags cli
 	kCtx := kong.Parse(&flags,
 		kong.Name("setup-go"),
-		kong.Description("Install a Go toolchain and link it onto PATH for later steps."),
+		kong.Description("Put a Go toolchain on PATH for later steps, installing one when a version is asked for or the image has none."),
 		kong.UsageOnError(),
 		functionyaml.Embed(),
 	)
