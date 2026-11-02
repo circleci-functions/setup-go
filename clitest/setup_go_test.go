@@ -114,6 +114,101 @@ func TestCLI_DetectOnly_GoIsASymlink(t *testing.T) {
 	assert.Equal(t, target, filepath.Join(realBin, "go"))
 }
 
+// TestCLI_NoVersion_UsesGoOnPath pins that a bare run on an image that ships
+// Go, the way most jobs run, keeps that Go rather than installing stable over
+// it, and still sets up the job caches.
+func TestCLI_NoVersion_UsesGoOnPath(t *testing.T) {
+	godev := newFakeGoDev(t, "go1.22.3")
+	s, run := sandbox(t)
+	binDir := stubGoOnlyBinDir(t)
+
+	out, err := run(t, map[string]string{"PATH": binDir, "GOPATH": ""},
+		"--install-dir", s.InstallDir, "--api-url", godev.URL)
+	assert.NilError(t, err, "got: %s", out)
+
+	assert.Equal(t, godev.releaseRequests.Load(), int64(0))
+	assert.Equal(t, godev.downloads.Load(), int64(0))
+	assert.Assert(t, strings.Contains(out, "resolve from "+binDir), "got: %s", out)
+
+	fi, err := os.Lstat(filepath.Join(binDir, "go"))
+	assert.NilError(t, err)
+	assert.Assert(t, fi.Mode()&os.ModeSymlink == 0, "the go already on PATH must be left in place")
+
+	assert.Equal(t, len(s.Cache.PendingCacheSaves()), 2)
+}
+
+// TestCLI_NoVersion_NoGoOnPath_InstallsStable pins that a bare run on an image
+// with no Go still gets one.
+func TestCLI_NoVersion_NoGoOnPath_InstallsStable(t *testing.T) {
+	godev := newFakeGoDev(t, "go1.23.1", "go1.22.3")
+	s, run := sandbox(t)
+
+	out, err := run(t, map[string]string{"PATH": s.BinDir, "GOPATH": ""}, installArgs(s, godev)...)
+	assert.NilError(t, err, "got: %s", out)
+
+	assert.Assert(t, strings.Contains(out, `resolved "stable" → go1.23.1`), "got: %s", out)
+	assert.Equal(t, godev.downloads.Load(), int64(1))
+	assertLinkedIntoInstallDir(t, s)
+}
+
+// TestCLI_NoVersion_BrokenGoOnPath_InstallsStable pins that a go on PATH that
+// cannot report its GOROOT, such as a version manager's shim with no version
+// selected, is treated as no Go at all rather than failing the step.
+func TestCLI_NoVersion_BrokenGoOnPath_InstallsStable(t *testing.T) {
+	godev := newFakeGoDev(t, "go1.23.1")
+	s, run := sandbox(t)
+
+	brokenDir := t.TempDir()
+	assert.NilError(t, os.WriteFile(filepath.Join(brokenDir, "go"), []byte("#!/bin/sh\nexit 1\n"), 0750)) //nolint:gosec
+
+	path := s.BinDir + string(os.PathListSeparator) + brokenDir
+	out, err := run(t, map[string]string{"PATH": path, "GOPATH": ""}, installArgs(s, godev)...)
+	assert.NilError(t, err, "got: %s", out)
+
+	assert.Assert(t, strings.Contains(out, `resolved "stable" → go1.23.1`), "got: %s", out)
+	assertLinkedIntoInstallDir(t, s)
+}
+
+// TestCLI_VersionRequested_InstallsOverGoOnPath pins that asking for a version
+// installs it even when PATH already has a Go.
+func TestCLI_VersionRequested_InstallsOverGoOnPath(t *testing.T) {
+	gomod := filepath.Join(t.TempDir(), "go.mod")
+	assert.NilError(t, os.WriteFile(gomod, []byte("module example\n\ngo 1.22\n"), 0600))
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"version", []string{"--version", "1.22.3"}},
+		{"version file", []string{"--version-file", gomod}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			godev := newFakeGoDev(t, "go1.22.3")
+			s, run := sandbox(t)
+
+			path := s.BinDir + string(os.PathListSeparator) + stubGoOnlyBinDir(t)
+			out, err := run(t, map[string]string{"PATH": path, "GOPATH": ""}, installArgs(s, godev, tt.args...)...)
+			assert.NilError(t, err, "got: %s", out)
+
+			assert.Assert(t, strings.Contains(out, "→ go1.22.3"), "got: %s", out)
+			assert.Equal(t, godev.downloads.Load(), int64(1))
+			assertLinkedIntoInstallDir(t, s)
+		})
+	}
+}
+
+// assertLinkedIntoInstallDir checks that the go in the sandbox's bin dir is a
+// link to a toolchain setup-go installed, not the one PATH already had.
+func assertLinkedIntoInstallDir(t *testing.T, s *sdktest.Sandbox) {
+	t.Helper()
+	target, err := os.Readlink(filepath.Join(s.BinDir, "go"))
+	assert.NilError(t, err, "expected setup-go to link go into %s", s.BinDir)
+	assert.Assert(t, strings.HasPrefix(target, s.InstallDir),
+		"expected the link to point inside %s, got %q", s.InstallDir, target)
+}
+
 // TestCLI_VersionFile_ReadsGoMod verifies that --version-file reads the go
 // directive from a go.mod file and uses it to select the toolchain version.
 func TestCLI_VersionFile_ReadsGoMod(t *testing.T) {

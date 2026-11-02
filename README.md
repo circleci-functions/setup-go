@@ -1,7 +1,8 @@
 # setup-go
 
-Installs a Go toolchain, puts it on `PATH` for the rest of the job, and caches
-what your build downloads and compiles.
+Installs a Go toolchain, or uses the one your image already has, puts it on
+`PATH` for the rest of the job, and caches what your build downloads and
+compiles.
 
 ```yaml
 version: 2.1
@@ -59,11 +60,26 @@ rather than just `go`, ask the toolchain: `go env GOROOT`.
 
 ## Choosing a version
 
+Without `--version` or `--version-file`, setup-go uses the Go your image
+already has, so a job on `cimg/go:1.26` keeps Go 1.26 and still gets the
+[caches](#caching). Only when `PATH` has no usable `go` does it install the
+newest stable release:
+
+```yaml
+- setup-go:
+    with:
+      checksum: '{{ checksum "go.sum" }}'
+```
+
+Pass either flag to install a specific Go, even over one the image ships.
+`--detect-only` uses the image's Go too, but fails rather than installing one
+when there is none.
+
 `--version` takes a spec, not just an exact release:
 
 | Spec | Resolves to |
 |------|-------------|
-| `stable` (default) | Newest stable release |
+| `stable` | Newest stable release |
 | `latest` | Newest release, including unstable |
 | `1.24` | Newest stable `go1.24.x` |
 | `1.24.3` | Exact `go1.24.3` |
@@ -173,9 +189,9 @@ downloaded and built again on every run.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--version` | `stable` | Version spec: `stable`, `latest`, `1.24`, `1.24.3` |
+| `--version` | (empty) | Version spec: `stable`, `latest`, `1.24`, `1.24.3`. Without it or `--version-file`, the `go` already on `PATH` is used, and `stable` is installed only if there is none |
 | `--version-file` | (empty) | Path to a `go.mod` or `go.work` file; installs the newest patch its `go` directive allows or, if higher, its `toolchain` line. Overrides `--version`. |
-| `--detect-only` | false | Use the `go` already on `PATH` instead of installing one. `--version` and `--version-file` are ignored |
+| `--detect-only` | false | Use the `go` already on `PATH` instead of installing one, and fail if there is none. `--version` and `--version-file` are ignored |
 | `--install-dir` | `~/.cache/setup-go` | Where toolchains are installed |
 | `--api-url` | (go.dev) | Base URL to fetch Go from instead of go.dev, e.g. a mirror. It must serve go.dev's JSON release list (`?mode=json&include=all`) and the archives it names, both from that one base URL |
 | `--cache` | true | Set to `false` to disable all caching |
