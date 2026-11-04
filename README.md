@@ -4,7 +4,7 @@ Installs a Go toolchain, or uses the one your image already has, puts it on
 `PATH` for the rest of the job, and caches what your build downloads and
 compiles.
 
-Use this function instead of the circleci/go orb.
+Use this function instead of the `circleci/go` orb.
 
 ```yaml
 version: 2.1
