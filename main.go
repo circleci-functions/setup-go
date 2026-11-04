@@ -172,7 +172,7 @@ func run(ctx context.Context, client *sdk.Client) error {
 	var flags cli
 	kCtx := kong.Parse(&flags,
 		kong.Name("setup-go"),
-		kong.Description("Put a Go toolchain on PATH for later steps, installing one when a version is asked for or the image has none."),
+		kong.Description("Put a Go toolchain on PATH for later steps, installing one when a version is asked for or the image has none. Use this function instead of the circleci/go orb."),
 		kong.UsageOnError(),
 		functionyaml.Embed(),
 	)
