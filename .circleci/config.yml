@@ -13,7 +13,7 @@ parameters:
 executors:
   go:
     docker:
-      - image: cimg/go:1.26
+      - image: cimg/go:1.27
   # bare-smoke execs the binary `build` cross-compiled, on an image with no Go.
   base:
     docker:
