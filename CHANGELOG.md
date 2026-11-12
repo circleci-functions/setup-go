@@ -6,6 +6,17 @@ by its release PR (see [RELEASE.md](RELEASE.md)) and becomes its GitHub release 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-12
+
+### What's Changed
+* Stop passing a GitHub token to CI to download the toolkit by @stiyyagura0901 in https://github.com/circleci-functions/setup-go/pull/47
+* Use the Go already on PATH when no version is asked for by @mangyau in https://github.com/circleci-functions/setup-go/pull/52
+* Say to use setup-go instead of the circleci/go orb by @mangyau in https://github.com/circleci-functions/setup-go/pull/54
+* Publish a pre-release from a branch with a pipeline parameter by @stiyyagura0901 in https://github.com/circleci-functions/setup-go/pull/55
+
+
+**Full Changelog**: https://github.com/circleci-functions/setup-go/compare/v0.7.0...v0.8.0
+
 ## [0.7.0] - 2026-10-22
 
 ### What's Changed
