@@ -33,13 +33,6 @@ nothing to source or export yourself.
 to the latest release. Each [flag](#flags) is a `with:` key, named without its
 leading `--`.
 
-Where the `functions:` block isn't available, as on CircleCI Server, call
-setup-go by its full name with `circleci run` and pass the flags after `--`:
-
-```yaml
-- run: circleci run github.com/circleci-functions/setup-go@v0.6.0 -- --version 1.24 --checksum '{{ checksum "go.sum" }}'
-```
-
 ## How it gets onto PATH
 
 A step inherits its environment from the job, not from the step before it, so
